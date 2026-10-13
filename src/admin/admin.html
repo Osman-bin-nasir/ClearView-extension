@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ClearView — Admin</title>
+    <link rel="stylesheet" href="../ui/theme.css" />
+    <link rel="stylesheet" href="admin.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <!-- Signed out: the only credential exchange in the extension. -->
+      <section id="gate" class="gate hidden">
+        <div class="card">
+          <div class="card-head">
+            <div class="card-icon" aria-hidden="true">🔐</div>
+            <div class="card-titles">
+              <div class="card-title">Administrator sign-in</div>
+              <div class="card-subtitle">Reviewing the shared blocklist requires an admin account.</div>
+            </div>
+          </div>
+          <div class="card-body stack">
+            <input class="input" id="email" type="email" placeholder="Admin email" autocomplete="username" />
+            <input class="input" id="password" type="password" placeholder="Password" autocomplete="current-password" />
+            <button class="btn primary" id="signin" type="button">Sign in</button>
+            <div class="status-line" id="gate-status"></div>
+            <div class="hint">
+              The password is exchanged for a short-lived token and never stored. The server
+              re-checks every action, so nothing here can grant access it does not already have.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Signed in: the moderation surface. -->
+      <section id="dashboard" class="hidden">
+        <header class="page-header">
+          <div class="row-between">
+            <div>
+              <h1 class="page-title">Shared blocklist moderation</h1>
+              <p class="page-subtitle" id="admin-who">Signed in</p>
+            </div>
+            <div class="header-actions">
+              <button class="btn small" id="back-options" type="button">Blocking settings</button>
+              <button class="btn small danger" id="signout" type="button">Sign out</button>
+            </div>
+          </div>
+        </header>
+
+        <nav class="tabs" id="tabs">
+          <button class="tab selected" data-tab="overview" type="button">Overview</button>
+          <button class="tab" data-tab="queue" type="button">Review queue</button>
+          <button class="tab" data-tab="rules" type="button">Published rules</button>
+          <button class="tab" data-tab="reports" type="button">False positives</button>
+        </nav>
+
+        <main id="panel"></main>
+      </section>
+    </div>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <script type="module" src="admin.js"></script>
+  </body>
+</html>

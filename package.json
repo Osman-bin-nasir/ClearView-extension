@@ -1,0 +1,12 @@
+{
+  "name": "clearview-extension",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ClearView Chrome extension — the Block tab as a browser interface to the existing ClearView protection system.",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.js\"",
+    "rules": "node scripts/extract-builtin-rules.mjs",
+    "icons": "node scripts/make-icons.mjs"
+  }
+}

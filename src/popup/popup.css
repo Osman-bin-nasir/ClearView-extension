@@ -1,0 +1,36 @@
+/* Popup shell: a fixed narrow column the Chrome action surface expects. */
+
+body {
+  width: 360px;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+main {
+  padding-bottom: 4px;
+}
+
+.popup-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  position: sticky;
+  bottom: 0;
+  padding: 10px 16px 14px;
+  background: linear-gradient(to top, var(--bg) 70%, transparent);
+}
+
+.popup-footer .btn {
+  flex: 1;
+}
+
+/* The inline "add" rows are tighter than the options page's. */
+.popup-field {
+  margin-top: 10px;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 6px;
+}

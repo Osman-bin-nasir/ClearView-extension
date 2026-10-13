@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>ClearView</title>
+    <link rel="stylesheet" href="../ui/theme.css" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <div class="row-between">
+        <div>
+          <h1 class="page-title">ClearView</h1>
+          <p class="page-subtitle" id="protection-status">Loading…</p>
+        </div>
+        <div class="card-icon" aria-hidden="true">🛡</div>
+      </div>
+      <p class="scope-note">
+        Protection applies to websites you visit in Chrome and to Google Search.
+      </p>
+    </header>
+
+    <main id="content"></main>
+
+    <footer class="popup-footer">
+      <button class="btn small" id="open-options" type="button">Full settings</button>
+      <button class="btn small" id="open-admin" type="button">Admin dashboard</button>
+    </footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
