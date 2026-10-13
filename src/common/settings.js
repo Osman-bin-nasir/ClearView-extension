@@ -62,22 +62,18 @@ export async function saveGlobalRules(snapshot) {
 }
 
 /**
- * The anonymous contributor id, generated once per install.
+ * The anonymous contributor id, generated ONCE per install.
  *
  * Deliberately a random UUID and nothing derived from the device: it exists only
  * because this extension made it up, which is what lets the UI honestly call
- * contributions anonymous. It can be regenerated at any time at the cost of at
- * most a duplicate report.
+ * contributions anonymous. Written when it is first asked for and never replaced
+ * — there is no regenerate path, on purpose: the id is what ties one install's
+ * contributions together on the server, so replacing it would silently split
+ * them.
  */
 export async function getAnonymousId() {
   const existing = await readLocal(STORAGE.anonymousId, null);
   if (isUuid(existing)) return existing;
-  const fresh = crypto.randomUUID();
-  await writeLocal(STORAGE.anonymousId, fresh);
-  return fresh;
-}
-
-export async function regenerateAnonymousId() {
   const fresh = crypto.randomUUID();
   await writeLocal(STORAGE.anonymousId, fresh);
   return fresh;

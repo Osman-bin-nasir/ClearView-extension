@@ -156,11 +156,17 @@ test('the block list drops junk and collapses duplicates', () => {
     { channelId: UC_A },
     { channelId: UC_A, handle: '@one' }, // the same channel again, now by id
     { handle: 'not a handle' },
+    { name: '  ' }, // nothing usable at all
     null,
     'a string is not a record',
   ]);
   assert.equal(list.length, 2);
   assert.deepEqual(list.map(channelLabel), ['@one', UC_A]);
+});
+
+test('a name-only block is labelled by its name', () => {
+  const [record] = normalizeBlockedChannels([{ name: 'The Japanese Town' }]);
+  assert.equal(channelLabel(record), 'The Japanese Town');
 });
 
 test('an unknown source falls back to "manual" rather than being stored raw', () => {
@@ -181,10 +187,31 @@ test('blocking a channel by id after its handle does not add a second entry', ()
   assert.equal(other.length, 2);
 });
 
-test('a record with nothing usable is refused, not stored blank', () => {
-  assert.equal(channelRecord({ handle: '', channelId: '', name: 'x' }), null);
+test('a record is refused only when it has nothing at all in it', () => {
+  assert.equal(channelRecord({ handle: '', channelId: '', name: '   ' }), null);
   assert.equal(channelRecord({}), null);
-  assert.equal(channelRecord({ name: 'Some Channel' }), null, 'a name is not an identity to store');
+});
+
+test('a NAME alone is a block, and is stored as a name', () => {
+  // YouTube's current grid gives a card's channel no href, so a right-click on a
+  // feed thumbnail has nothing but the printed name — and refusing it would make
+  // the menu entry a dead end. It is stored as what it is, never turned into a
+  // handle, and matching reads names.
+  const byName = channelRecord({ name: '  The Japanese Town  ', source: 'context-menu' });
+  assert.equal(byName.handle, null);
+  assert.equal(byName.channelId, null);
+  assert.equal(byName.name, 'The Japanese Town');
+  assert.equal(byName.source, 'context-menu');
+  assert.ok(Number.isFinite(byName.addedAt));
+});
+
+test('two name-only records for the same name are one block', () => {
+  const first = addBlockedChannel([], channelRecord({ name: 'Some Channel' }));
+  assert.equal(first.length, 1);
+  assert.equal(addBlockedChannel(first, channelRecord({ name: 'some   channel' })).length, 1);
+  assert.equal(addBlockedChannel(first, channelRecord({ name: 'Other Channel' })).length, 2);
+  // And a handle block is still its own row, not merged into a name.
+  assert.equal(addBlockedChannel(first, channelRecord({ handle: '@somechannel' })).length, 2);
 });
 
 test('removing works by handle and by channel id', () => {
@@ -211,6 +238,56 @@ test('an empty block list matches nothing, whatever it is asked', () => {
   assert.equal(matchBlockedChannel(blocked, { handle: '@one', channelId: UC_A, name: 'One' }), null);
 });
 
+test('a card that gives only a displayed NAME matches the name that was blocked', () => {
+  // YouTube's CURRENT grid renders the channel as an attributed string with a
+  // click command and no href, so a card can offer nothing but the printed
+  // name — and a handle derived from a name ("@thejapanesetown") is not that
+  // channel's real handle ("@thejapanesetown-jt6fy").
+  const blocked = {
+    channels: new Set(['@thejapanesetown-jt6fy']),
+    channelIds: new Set(),
+    channelNames: new Set(['the japanese town']),
+  };
+
+  assert.equal(
+    matchBlockedChannel(blocked, { handle: null, channelId: null, name: 'The Japanese Town' }),
+    'the japanese town'
+  );
+  assert.equal(
+    matchBlockedChannel(blocked, { handle: null, channelId: null, name: 'Some Other Channel' }),
+    null
+  );
+  // A name matches whatever its spacing and casing, and the handle still wins
+  // when the card can offer one.
+  assert.equal(
+    matchBlockedChannel(blocked, { handle: null, channelId: null, name: 'the   JAPANESE town' }),
+    'the japanese town'
+  );
+  assert.equal(
+    matchBlockedChannel(blocked, {
+      handle: '@TheJapaneseTown-jt6fy',
+      channelId: null,
+      name: 'whatever',
+    }),
+    '@thejapanesetown-jt6fy'
+  );
+});
+
+test('unblocking accepts the displayed name that matching reported', () => {
+  // `channel/status` hands the UI whatever matched, and the UI unblocks with
+  // that value — so a match BY NAME has to be removable by name, or the button
+  // would say it worked and change nothing.
+  const list = normalizeBlockedChannels([
+    { handle: '@thejapanesetown-jt6fy', name: 'The Japanese Town' },
+    { handle: '@other', name: 'Other' },
+  ]);
+  assert.deepEqual(
+    removeBlockedChannel(list, 'the japanese town').map(channelLabel),
+    ['@other']
+  );
+  assert.equal(removeBlockedChannel(list, '@nobody').length, 2, 'an unmatched name removes nothing');
+});
+
 // ── The bundle ───────────────────────────────────────────────────────────
 
 test('the rule bundle carries both handles and channel ids', () => {
@@ -226,6 +303,26 @@ test('the rule bundle carries both handles and channel ids', () => {
   );
   assert.deepEqual(bundle.channels, ['@one']);
   assert.deepEqual(bundle.channelIds, [UC_B]);
+});
+
+test('the rule bundle carries the blocked display names alongside the handles', () => {
+  // They are carried for one reason: a card that gives no channel link can only
+  // be matched by the name it prints.
+  const bundle = buildRuleBundle(
+    {
+      strictMode: false,
+      blockedDomains: [],
+      userKeywords: [],
+      youtubeKeywords: [],
+      blockedChannels: [
+        { handle: '@one', name: 'One Channel' },
+        { handle: '@two' },
+      ],
+    },
+    null
+  );
+  assert.deepEqual(bundle.channels, ['@one', '@two']);
+  assert.deepEqual(bundle.channelNames, ['one channel']);
 });
 
 test('a channel rule from the shared list is merged with the user’s own', () => {

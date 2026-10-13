@@ -32,6 +32,9 @@
   --primary-strong: #0b8563;
   --primary-contrast: #ffffff;
   --primary-soft: rgba(15, 157, 118, 0.1);
+  /* The accent under its older name: the admin table's header rule asks for it,
+     and it is the same colour, so it aliases rather than duplicates. */
+  --accent: var(--primary);
 
   /* Status */
   --danger: #d64545;

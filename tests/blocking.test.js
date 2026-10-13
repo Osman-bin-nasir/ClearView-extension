@@ -50,6 +50,37 @@ test('a blocked query on Bing, DuckDuckGo and YouTube is caught', () => {
   }
 });
 
+test('the SAME phrase is judged the same way on any site’s search', () => {
+  // The phrase tier ("woman" + "bikini") applies to a TYPED QUERY and is
+  // deliberately skipped for a URL, so /photos/beach.html cannot trip it. Only
+  // the named engines' queries reached it once, which made the same phrase block
+  // on Google and pass on a Reddit or Amazon search. Same technique, so the same
+  // verdict — and the same named match, or the two have not really converged.
+  const s = state();
+  const google = evaluateUrl('https://www.google.com/search?q=woman+bikini', s);
+  assert.equal(google.action, 'search');
+  assert.equal(google.matchedItem, 'woman + bikini');
+
+  for (const url of [
+    'https://www.reddit.com/search/?q=woman+bikini',
+    'https://twitter.com/search?q=woman+bikini',
+    'https://www.amazon.com/s?k=woman+bikini',
+    'https://www.ebay.com/sch/i.html?_nkw=woman+bikini',
+    'https://yandex.com/search/?text=woman+bikini',
+    'https://ablog.example.com/?s=woman+bikini',
+  ]) {
+    const decision = evaluateUrl(url, s);
+    assert.equal(decision.action, 'search', url);
+    assert.equal(decision.matchedItem, google.matchedItem, url);
+  }
+
+  // A PATH that merely contains the two halves is still not a search: the URL
+  // check keeps its own, weaker rule.
+  assert.deepEqual(evaluateUrl('https://example.com/photos/beach.html', s), { action: 'allow' });
+  // And a parameter that is not a search parameter is not judged as one.
+  assert.deepEqual(evaluateUrl('https://example.com/page?utm_source=woman+bikini', s), { action: 'allow' });
+});
+
 test('a blocked host is blocked', () => {
   const s = state();
   const decision = evaluateUrl('https://www.pornhub.com/watch/123', s);
@@ -112,10 +143,39 @@ test('feed cards match on title and on channel', () => {
   assert.equal(blocked[1].via, 'channel');
 });
 
+test('a card that gives only the channel NAME is filtered, not left in place', () => {
+  // YouTube's current grid gives a card no channel link at all — the channel is
+  // an attributed string with a click command — so the printed name is the only
+  // signal there is, and a blocked channel stayed in the feed without it.
+  const s = state({ bundle: { channels: [], channelNames: ['the japanese town'] } });
+  const blocked = evaluateFeedCards(
+    [
+      { title: 'a quiet documentary', channel: 'the   JAPANESE town' },
+      { title: 'something else', channel: 'Another Channel' },
+    ],
+    s
+  );
+  assert.deepEqual(blocked.map((b) => b.index), [0]);
+  assert.equal(blocked[0].via, 'channel');
+});
+
 test('feed evaluation is inert when Brain Bot is off or protection is off', () => {
   const cards = [{ title: 'porn compilation', channel: 'x' }];
   assert.deepEqual(evaluateFeedCards(cards, state({ settings: { brainBotEnabled: false } })), []);
   assert.deepEqual(evaluateFeedCards(cards, state({ settings: { protectionEnabled: false } })), []);
+});
+
+test('a blocked channel is still filtered when Brain Bot is off, and a keyword is not', () => {
+  const s = state({ settings: { brainBotEnabled: false } });
+  const blocked = evaluateFeedCards(
+    [
+      { title: 'porn compilation', channel: 'Someone' },
+      { title: 'cooking tips', channel: 'BlockedChannel' },
+    ],
+    s
+  );
+  assert.deepEqual(blocked.map((b) => b.index), [1]);
+  assert.equal(blocked[0].via, 'channel');
 });
 
 test('unrelated cards are never touched', () => {
@@ -125,6 +185,113 @@ test('unrelated cards are never touched', () => {
     s
   );
   assert.deepEqual(blocked, []);
+});
+
+test('a blocked search on ANY site is redirected to the safe page, query left behind', async () => {
+  // The pipeline, not only the decision: `evaluateUrl` says "search", and this is
+  // what the worker then DOES with it. Asserting the decision alone would let the
+  // two drift — a search that is decided correctly and then lands on the blocked
+  // page is not the behaviour anyone asked for.
+  const { handleNavigation } = await import('../src/background/blocking.js');
+  const { SAFE_SEARCH_DESTINATION } = await import('../src/common/search-engines.js');
+
+  const calls = [];
+  const previousChrome = globalThis.chrome;
+  globalThis.chrome = {
+    runtime: { getURL: (path) => `chrome-extension://clearview/${path}` },
+    tabs: { update: async (tabId, options) => { calls.push({ tabId, url: options.url }); } },
+  };
+  try {
+    // A search typed on a site with no rule of its own — the case that used to be
+    // judged as a URL and let through.
+    const search = await handleNavigation(
+      { frameId: 0, tabId: 11, url: 'https://www.reddit.com/search/?q=woman+bikini' },
+      state()
+    );
+    assert.equal(search.action, 'search');
+    assert.equal(search.applied, true);
+    assert.equal(calls.at(-1).url, SAFE_SEARCH_DESTINATION);
+    assert.equal(new URL(calls.at(-1).url).searchParams.get('q'), null, 'the query is never carried over');
+    assert.ok(!calls.at(-1).url.startsWith('chrome-extension://'), 'a search goes to the safe page, not the blocked page');
+
+    // And the other half of the same mechanism still works: a keyword in a PATH,
+    // on a site we do not recognise, still lands on the extension's own page.
+    const path = await handleNavigation(
+      { frameId: 0, tabId: 12, url: 'https://example.com/porn/video' },
+      state()
+    );
+    assert.equal(path.action, 'block');
+    assert.equal(calls.at(-1).url, 'chrome-extension://clearview/src/blocked/blocked.html?reason=keyword');
+  } finally {
+    if (previousChrome === undefined) delete globalThis.chrome;
+    else globalThis.chrome = previousChrome;
+  }
+});
+
+test('a search typed into a SITE’S OWN search box is caught, not only a page load', async () => {
+  // The report, in the reporter's words: "on YouTube when I search this it still
+  // doesn't redirect me". Typing in YouTube's search box never leaves the
+  // document — YouTube rewrites the address itself with history.pushState — so it
+  // fires NO navigation event, and a blocker that listened only to
+  // onBeforeNavigate never saw the query. The URL was right and the rules
+  // matched; nothing ever asked. This drives the real listener, with the real
+  // URL, the way YouTube delivers it.
+  const { initBlocker } = await import('../src/background/blocking.js');
+  const { YOUTUBE_HOME } = await import('../src/common/search-engines.js');
+
+  const listeners = { before: [], history: [] };
+  const calls = [];
+  const previousChrome = globalThis.chrome;
+  globalThis.chrome = {
+    runtime: { getURL: (path) => `chrome-extension://clearview/${path}` },
+    tabs: { update: async (tabId, options) => { calls.push({ tabId, url: options.url }); } },
+    webNavigation: {
+      onBeforeNavigate: { addListener: (fn) => listeners.before.push(fn) },
+      onHistoryStateUpdated: { addListener: (fn) => listeners.history.push(fn) },
+    },
+  };
+  const blocked = [];
+  const live = { ...state(), ready: true };
+  try {
+    initBlocker({ getState: async () => live, onBlocked: (outcome, url) => blocked.push({ outcome, url }) });
+
+    assert.equal(listeners.before.length, 1, 'a document navigation is evaluated');
+    assert.equal(listeners.history.length, 1, 'and so is a same-document one');
+
+    // The exact URL from the report, delivered as YouTube delivers it.
+    await listeners.history[0]({
+      frameId: 0,
+      tabId: 21,
+      url: 'https://www.youtube.com/results?search_query=men+pics',
+    });
+    assert.equal(calls.length, 1, 'the tab must actually be moved');
+    // A search made ON YouTube lands back on YouTube — not on Google's safe
+    // page. Same block, and the destination follows the surface searched on.
+    assert.equal(calls[0].url, YOUTUBE_HOME);
+    assert.equal(calls[0].tabId, 21);
+    assert.equal(new URL(calls[0].url).searchParams.get('search_query'), null, 'the query is never carried over');
+    assert.equal(blocked.at(-1).outcome.action, 'search');
+    assert.equal(blocked.at(-1).outcome.matchedItem, 'men + pics');
+
+    // A same-document update that is clean leaves the tab where it is.
+    await listeners.history[0]({
+      frameId: 0,
+      tabId: 22,
+      url: 'https://www.youtube.com/results?search_query=lofi+beats',
+    });
+    assert.equal(calls.length, 1, 'a clean search must not move the tab');
+
+    // A subframe is never the tab's own address, so it is not evaluated.
+    await listeners.history[0]({
+      frameId: 7,
+      tabId: 23,
+      url: 'https://www.youtube.com/results?search_query=men+pics',
+    });
+    assert.equal(calls.length, 1, 'a subframe update must not move the tab');
+  } finally {
+    if (previousChrome === undefined) delete globalThis.chrome;
+    else globalThis.chrome = previousChrome;
+  }
 });
 
 // ── Blocked channels: the channel's own pages ────────────────────────────

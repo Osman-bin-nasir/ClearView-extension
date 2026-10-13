@@ -15,13 +15,13 @@ import {
   getAnonymousId,
   getGlobalRules,
   getStats,
-  regenerateAnonymousId,
   resetStats,
   updateSettings,
 } from '../common/settings.js';
 import {
   addBlockedChannel,
   channelIdentity,
+  channelLabel,
   channelRecord,
   normalizeBlockedChannels,
   removeBlockedChannel,
@@ -48,11 +48,12 @@ import {
 import {
   blockTab,
   evaluateFeedCards,
+  initBlocker,
   installAdRules,
   installDomainRules,
-  initBlocker,
   isChannelBlocked,
 } from './blocking.js';
+import { rulesFingerprint } from '../common/rules-bundle.js';
 import { syncGlobalRules } from './rules-sync.js';
 import { ensureState, refreshState } from './state.js';
 import {
@@ -136,7 +137,29 @@ async function blockChannel({ handle = null, channelId = null, name = null, sour
   const settings = (await ensureState()).settings;
   await updateSettings({ blockedChannels: addBlockedChannel(settings.blockedChannels, record) });
   await applyState();
-  return describeState();
+  // The RECORD is returned alongside the state because the caller has to say
+  // what was blocked — by handle where there is one, by name where there is not.
+  return { state: await describeState(), record };
+}
+
+/**
+ * Block what an entry point could actually see — a URL, a name, or both.
+ *
+ * One path for the ⋮ menu, the right-click menu and the settings page, so "a
+ * channel target becomes a block record" is defined once. The URL is asked for
+ * the handle and the id and the NAME IS KEPT AS A NAME: turning it into a handle
+ * here would store `@thejapanesetown` for `The Japanese Town`, which matches
+ * nothing and blocks nothing — while a stored name matches the same name, which
+ * is what a right-click on the current grid's link-less card has to mean.
+ */
+async function blockChannelFromTarget({ url = null, name = null, channelId = null, source = 'manual' } = {}) {
+  const fromUrl = channelIdentity({ url });
+  return blockChannel({
+    handle: fromUrl?.handle ?? null,
+    channelId: fromUrl?.channelId ?? channelId,
+    name: name ?? fromUrl?.name ?? null,
+    source,
+  });
 }
 
 // ── The right-click menu ─────────────────────────────────────────────────
@@ -164,20 +187,15 @@ async function askPageForChannel(tabId) {
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== CONTEXT_MENU_ID) return;
   void (async () => {
-    const { identity, reason } = await resolveContextTarget(info, tab, askPageForChannel);
-    if (!identity) {
+    const { target, reason } = await resolveContextTarget(info, tab, askPageForChannel);
+    if (!target) {
       console.warn('[clearview] block channel: nothing to block —', reason);
       await report(tab?.id, unresolvableMessage(reason), { failure: true });
       return;
     }
     try {
-      const state = await blockChannel({
-        handle: identity.handle,
-        channelId: identity.channelId,
-        name: identity.name,
-        source: 'context-menu',
-      });
-      await report(tab?.id, describeBlock(identity, state));
+      const { state, record } = await blockChannelFromTarget({ ...target, source: 'context-menu' });
+      await report(tab?.id, describeBlock(record, state));
     } catch (error) {
       console.warn('[clearview] block channel failed:', error?.code ?? error?.message);
       await report(tab?.id, error?.message ?? 'Could not block that channel.', { failure: true });
@@ -239,9 +257,15 @@ async function report(tabId, text, { failure = false } = {}) {
 }
 
 /** "Blocked @handle" — the label the user will see in settings. */
-function describeBlock(identity, state) {
-  const label = identity.handle ?? identity.channelId ?? 'that channel';
-  const total = state.bundleCounts.channels + state.bundleCounts.channelIds;
+function describeBlock(record, state) {
+  const label = channelLabel(record) ?? 'that channel';
+  // All THREE kinds of channel block count. Handles and ids are not the whole
+  // list any more: a block made from a feed thumbnail is stored by the name the
+  // card prints, and counting only the first two meant the toast said
+  // "0 channels blocked" immediately after blocking one.
+  const counts = state.bundleCounts;
+  const total =
+    (counts.channels ?? 0) + (counts.channelIds ?? 0) + (counts.channelNames ?? 0);
   return `Blocked ${label}. ${total} channel${total === 1 ? '' : 's'} blocked in ClearView.`;
 }
 
@@ -307,6 +331,9 @@ async function describeState() {
       youtube: state.bundle.youtube.length,
       channels: state.bundle.channels.length,
       channelIds: state.bundle.channelIds.length,
+      // A name-only block (a card that printed a channel name and no link) is a
+      // channel block like any other, so the UI can count it as one.
+      channelNames: state.bundle.channelNames.length,
     },
     // The block list as the UI shows it: normalized, de-duplicated, and with
     // the display names and origins the raw setting does not carry.
@@ -355,6 +382,10 @@ async function rulesForContent() {
     brainBotMode: settings.brainBotMode,
     blockShorts: settings.blockShorts,
     blockYoutubeAds: settings.blockYoutubeAds,
+    // An opaque fingerprint of everything above AND the rules themselves. The
+    // page cannot see the rules, but it can see when they changed — which is
+    // what tells it to judge already-judged feed cards again.
+    revision: rulesFingerprint(settings, bundle),
     // Built-in terms plus the YouTube-scoped set: the app matches feed cards
     // against the always-on filter AND the user's YouTube keywords.
     keywords: bundle.youtube,
@@ -522,21 +553,26 @@ const handlers = {
    * ⋮ menu and one blocked in settings are indistinguishable afterwards.
    */
   'channel/block': async (message) => {
-    // The callers that see a channel first (the ⋮ menu, the right-click menu)
-    // have an HREF, not a handle, so the identity is derived here — by the same
-    // parser the matcher uses.
-    const fromUrl = channelIdentity({ url: message.url ?? null });
+    // An explicit handle (the settings page's "add by handle" field) is taken as
+    // given; everything else is a target to be resolved — the HREF the ⋮ menu and
+    // the right-click menu can see, and the NAME a link-less card can see.
+    if (message.handle) {
+      const { state } = await blockChannel({
+        handle: message.handle,
+        channelId: message.channelId ?? null,
+        name: message.name ?? null,
+        source: message.source ?? 'manual',
+      });
+      return state;
+    }
 
-    // A display NAME is deliberately not turned into a handle here. Matching may
-    // fall back to a name; a BLOCK may not, because a handle invented from a
-    // name would be written to storage and would then block a channel the user
-    // never chose — or nothing at all, silently. Nothing usable means a refusal.
-    return blockChannel({
-      handle: message.handle ?? fromUrl?.handle ?? null,
-      channelId: message.channelId ?? fromUrl?.channelId ?? null,
-      name: message.name ?? fromUrl?.name ?? null,
+    const { state } = await blockChannelFromTarget({
+      url: message.url ?? null,
+      name: message.name ?? null,
+      channelId: message.channelId ?? null,
       source: message.source ?? 'manual',
     });
+    return state;
   },
 
   /**
@@ -568,10 +604,11 @@ const handlers = {
    * Is the channel on THIS page blocked?
    *
    * Asked by the content script, which is the only thing that can read the
-   * channel off a video page. The redirect happens here rather than there: a
-   * page cannot navigate itself to a `chrome-extension://` URL, and keeping it
-   * here means a blocked channel lands on the same blocked page a blocked
-   * website does, with the same reason-code discipline.
+   * channel off a video page — and, for a channel blocked by NAME, off a channel
+   * page, whose URL carries only the handle. The redirect happens here rather
+   * than there: a page cannot navigate itself to a `chrome-extension://` URL, and
+   * keeping it here means a blocked channel lands on the same blocked page a
+   * blocked website does, with the same reason-code discipline.
    */
   'channel/check': async (message, sender) => {
     const state = await ensureState();
@@ -605,11 +642,6 @@ const handlers = {
 
   'stats/reset': async () => {
     await resetStats();
-    return describeState();
-  },
-
-  'identity/regenerate': async () => {
-    await regenerateAnonymousId();
     return describeState();
   },
 

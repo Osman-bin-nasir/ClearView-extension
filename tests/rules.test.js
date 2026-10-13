@@ -8,7 +8,12 @@ import {
   COMBINATION_RISKY_TERMS,
   STRICT_MODE_KEYWORDS,
 } from '../src/common/rules/index.js';
-import { buildRuleBundle, normalizeHandle, normalizeKeywords } from '../src/common/rules-bundle.js';
+import {
+  buildRuleBundle,
+  normalizeHandle,
+  normalizeKeywords,
+  rulesFingerprint,
+} from '../src/common/rules-bundle.js';
 import { activeBuiltInKeywords } from '../src/common/matching.js';
 
 test('the built-in rule lists are populated', () => {
@@ -113,6 +118,50 @@ test('user domains are merged with the built-in domains', () => {
   );
   assert.ok(bundle.domains.includes('mysite.example'));
   assert.ok(bundle.domains.includes('pornhub.com'));
+});
+
+test('the rules fingerprint changes whenever what a page hides changes', () => {
+  // The content script cannot see the rules, so this is the ONLY thing that can
+  // tell it its past decisions about feed cards have gone stale.
+  const base = {
+    strictMode: false,
+    blockedDomains: [],
+    userKeywords: [],
+    youtubeKeywords: [],
+    blockedChannels: [{ handle: '@one', name: 'One' }],
+  };
+  const settings = {
+    protectionEnabled: true,
+    brainBotEnabled: true,
+    brainBotMode: 'overlay',
+    blockShorts: false,
+  };
+  const bundle = buildRuleBundle(base, null);
+
+  assert.equal(
+    rulesFingerprint(settings, bundle),
+    rulesFingerprint({ ...settings }, { ...bundle }),
+    'equal rules must produce an equal fingerprint'
+  );
+  assert.notEqual(
+    rulesFingerprint(settings, bundle),
+    rulesFingerprint({ ...settings, brainBotMode: 'remove' }, bundle),
+    'a display-mode switch is a rules change'
+  );
+  assert.notEqual(
+    rulesFingerprint(settings, bundle),
+    rulesFingerprint(settings, { ...bundle, youtube: [...bundle.youtube, 'newterm'] }),
+    'a new keyword is a rules change, and the page never sees the keyword itself'
+  );
+  assert.notEqual(
+    rulesFingerprint(settings, bundle),
+    rulesFingerprint(settings, { ...bundle, channelNames: [...bundle.channelNames, 'two'] }),
+    'a newly blocked channel is a rules change'
+  );
+  assert.notEqual(
+    rulesFingerprint(settings, bundle),
+    rulesFingerprint({ ...settings, protectionEnabled: false }, bundle)
+  );
 });
 
 test('handle and keyword normalization match the server', () => {

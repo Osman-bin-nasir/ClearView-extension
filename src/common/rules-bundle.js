@@ -10,7 +10,7 @@
  */
 
 import { activeBuiltInKeywords, allBlockedDomains } from './matching.js';
-import { normalizeBlockedChannels, normalizeHandle } from './channels.js';
+import { normalizeBlockedChannels, normalizeChannelName, normalizeHandle } from './channels.js';
 
 // Channel identity lives in `channels.js` so the block-list matching and the
 // URL parsing that feeds it sit together. Re-exported here because this is the
@@ -35,7 +35,7 @@ export function normalizeKeywords(list) {
  *
  * @param {object} settings     the merged settings object
  * @param {object|null} global  the cached global rules `{ keywords, channels }`
- * @returns {{ builtIn: string[], domains: string[], everywhere: string[], youtube: string[], channels: string[], channelIds: string[] }}
+ * @returns {{ builtIn: string[], domains: string[], everywhere: string[], youtube: string[], channels: string[], channelIds: string[], channelNames: string[] }}
  */
 export function buildRuleBundle(settings, global) {
   const globalKeywords = (global?.keywords ?? []).map((k) => k.keyword);
@@ -73,5 +73,51 @@ export function buildRuleBundle(settings, global) {
 
   const channelIds = [...new Set(blocked.map((c) => c.channelId).filter(Boolean))];
 
-  return { builtIn, domains, everywhere, youtube, channels, channelIds };
+  // The displayed NAMES the user blocked, carried alongside the handles for one
+  // reason: YouTube's CURRENT grid renders a card's channel as an attributed
+  // string with a click command and NO href — the printed name is all such a
+  // card gives — so a channel blocked by handle kept appearing in the feed.
+  const channelNames = [...new Set(blocked.map((c) => normalizeChannelName(c.name)).filter(Boolean))];
+
+  return { builtIn, domains, everywhere, youtube, channels, channelIds, channelNames };
+}
+
+/**
+ * A short, opaque fingerprint of everything that decides what a page hides.
+ *
+ * The content script has to know when its own past decisions have gone stale —
+ * a card it judged clean two pages ago must be judged again after the user
+ * blocks a channel — without ever holding the rules themselves. So the worker
+ * sends this, and the page compares two strings. It is deliberately also a
+ * function of the KEYWORDS, which the page never sees: adding a keyword is a
+ * rules change like any other, and the old code's six-field signature could not
+ * notice one.
+ *
+ * Not a security hash and not a cache key: equality is the only property it has
+ * to have, and a collision can only ever mean one extra re-scan.
+ */
+export function rulesFingerprint(settings, bundle) {
+  return fingerprint(
+    [
+      settings?.protectionEnabled ? '1' : '0',
+      settings?.brainBotEnabled ? '1' : '0',
+      settings?.brainBotMode ?? '',
+      settings?.blockShorts ? '1' : '0',
+      (bundle?.builtIn ?? []).join('|'),
+      (bundle?.youtube ?? []).join('|'),
+      (bundle?.channels ?? []).join('|'),
+      (bundle?.channelIds ?? []).join('|'),
+      (bundle?.channelNames ?? []).join('|'),
+    ].join('~')
+  );
+}
+
+/** FNV-1a, 32-bit, base 36 — short, stable, and enough to notice a change. */
+function fingerprint(value) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36);
 }

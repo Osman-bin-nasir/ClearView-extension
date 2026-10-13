@@ -52,7 +52,12 @@ function stubChrome() {
     },
     tabs: { async sendMessage() {}, async update() {} },
     action: { async setBadgeText() {}, async setBadgeBackgroundColor() {}, async setTitle() {} },
-    webNavigation: { onBeforeNavigate: { addListener: () => {} } },
+    // Both navigation events the blocker registers: the page load, and the
+    // same-document pushState that a site's own search box produces.
+    webNavigation: {
+      onBeforeNavigate: { addListener: () => {} },
+      onHistoryStateUpdated: { addListener: () => {} },
+    },
     declarativeNetRequest: {
       async getDynamicRules() {
         return [];
