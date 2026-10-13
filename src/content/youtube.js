@@ -32,8 +32,54 @@
 (() => {
   const OVERLAY_CLASS = 'cv-block-overlay';
   const HIDE_CLASS = 'cv-hide-shorts';
+  const HIDE_ADS_CLASS = 'cv-block-ads';
   const MENU_ITEM_CLASS = 'cv-menu-item';
   const TOAST_CLASS = 'cv-toast';
+
+  /**
+   * The ad containers YouTube renders around the video and in the feed.
+   *
+   * A list of shapes, not one selector: YouTube serves several ad formats
+   * (display, in-feed, promoted video, masthead, banner) and each has its own
+   * element, and it renames them often — so the stylesheet hides these by class
+   * on <html> (instant, and independent of this script's timing) while this list
+   * drives the JS pass that REMOVES the in-feed ones (a hidden grid item leaves
+   * a gap; a removed one does not).
+   */
+  const AD_ELEMENT_SELECTOR = [
+    '#masthead-ad',
+    '#player-ads',
+    'ytd-ad-slot-renderer',
+    'ytd-in-feed-ad-layout-renderer',
+    'ytd-promoted-sparkles-web-renderer',
+    'ytd-promoted-sparkles-text-search-renderer',
+    'ytd-promoted-video-renderer',
+    'ytd-compact-promoted-video-renderer',
+    'ytd-display-ad-renderer',
+    'ytd-banner-promo-renderer',
+    'ytd-statement-banner-renderer',
+    'ytd-video-masthead-ad-v3-renderer',
+    'ytd-primetime-promo-renderer',
+  ].join(',');
+
+  /** The in-feed ads own a grid cell; its WRAPPER has to go with it. */
+  const AD_GRID_WRAPPER_SELECTOR =
+    'ytd-rich-item-renderer, ytd-compact-promoted-video-renderer, ytd-rich-section-renderer';
+
+  /** YouTube's own controls for an ad that is playing, in landing order. */
+  const AD_SKIP_SELECTOR = [
+    '.ytp-ad-skip-button-modern',
+    '.ytp-ad-skip-button',
+    '.ytp-skip-ad-button',
+    '.ytp-ad-skip-button-slot button',
+  ].join(',');
+
+  /** The "close" control on a banner/overlay ad drawn over the video. */
+  const AD_OVERLAY_CLOSE_SELECTOR = [
+    '.ytp-ad-overlay-close-button',
+    '.ytp-ad-overlay-close-container',
+    '#dismiss-button',
+  ].join(',');
 
   /** Card containers YouTube uses across home, search, subscriptions, related. */
   const CARD_SELECTOR = [
@@ -58,6 +104,7 @@
     brainBotEnabled: false,
     brainBotMode: 'overlay',
     blockShorts: false,
+    blockYoutubeAds: false,
     blockedChannelCount: 0,
     hasRules: false,
   };
@@ -168,6 +215,134 @@
     for (const element of [...hiddenShorts.keys()]) {
       if (!element.isConnected) hiddenShorts.delete(element);
     }
+  }
+
+  // ── YouTube ads ────────────────────────────────────────────────────────
+
+  /**
+   * Ad containers this script has removed, with where to put them back.
+   *
+   * Held so the toggle is REVERSIBLE: turning ad blocking off restores what was
+   * taken out rather than leaving the page with holes until the next reload.
+   */
+  const removedAds = new Map();
+
+  /** True when ad blocking is on: needs Protection AND the ad switch. */
+  function adsOn() {
+    return Boolean(config.enabled && config.blockYoutubeAds);
+  }
+
+  /**
+   * Strip the ad slots out of the page.
+   *
+   * The wrapper is removed, not just the ad inside it: an in-feed ad occupies a
+   * grid cell of its own, and hiding only its inner element leaves an empty tile
+   * in the feed. `display: none` from the stylesheet still covers the formats
+   * that have no wrapper and the instant before this pass runs.
+   */
+  function removeAdElements() {
+    for (const element of document.querySelectorAll(AD_ELEMENT_SELECTOR)) {
+      const target = element.closest(AD_GRID_WRAPPER_SELECTOR) ?? element;
+      if (removedAds.has(target)) continue;
+      // A grid wrapper is only removed when the ad is what it exists for, so an
+      // ordinary video that happens to contain an ad node is never taken out.
+      if (target !== element && !target.querySelector(AD_ELEMENT_SELECTOR)) continue;
+      removedAds.set(target, { parent: target.parentNode, next: target.nextSibling });
+      target.remove();
+    }
+  }
+
+  function restoreAdElements() {
+    for (const [node, spot] of removedAds) {
+      if (node.isConnected || !spot.parent) continue;
+      spot.parent.insertBefore(node, spot.next);
+    }
+    removedAds.clear();
+  }
+
+  /**
+   * Deal with an ad that is PLAYING in the player.
+   *
+   * The network rules stop most ads before they load, but YouTube still serves
+   * one from its own origin sometimes. Three moves, in order:
+   *
+   *  1. click YouTube's own skip control the moment it exists — the honest skip;
+   *  2. dismiss an overlay/banner ad drawn over the video;
+   *  3. for an ad the user cannot dismiss, fast-forward it to its end (and mute
+   *     it while it runs), which is what every ad blocker has to do for an
+   *     unskippable pre-roll.
+   *
+   * The mute is remembered and undone the moment the ad ends, so it can never
+   * carry over and silence the video the user came to watch.
+   */
+  function handleVideoAds() {
+    const player = document.querySelector('#movie_player, .html5-video-player');
+    if (!player) return;
+    const video = player.querySelector('video');
+    const adPlaying = player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting');
+
+    if (!adPlaying) {
+      // The ad is over: undo only the mute WE applied.
+      if (video?.dataset.cvAdMuted === '1') video.muted = false;
+      if (video) delete video.dataset.cvAdMuted;
+      return;
+    }
+
+    if (video && video.dataset.cvAdMuted === undefined) {
+      video.dataset.cvAdMuted = video.muted ? '0' : '1';
+      video.muted = true;
+    }
+
+    const overlayClose = player.querySelector(AD_OVERLAY_CLOSE_SELECTOR);
+    if (overlayClose && isVisible(overlayClose)) overlayClose.click();
+
+    const skip = player.querySelector(AD_SKIP_SELECTOR);
+    if (skip && isVisible(skip)) {
+      skip.click();
+      return;
+    }
+
+    // Unskippable: run it out instead of playing it.
+    if (video && Number.isFinite(video.duration) && video.duration > 0.1 && video.currentTime < video.duration - 0.1) {
+      try {
+        video.currentTime = video.duration;
+      } catch {
+        /* a live stream's duration is Infinity; nothing to skip */
+      }
+    }
+  }
+
+  /**
+   * Undo the mute the unskippable path applied, if we applied one.
+   *
+   * A separate path from `handleVideoAds` because it has to run when ad blocking
+   * is switched OFF mid-ad: at that point no ad should be skipped, but the video
+   * must not stay silent either.
+   */
+  function releaseAdMute() {
+    const video = document.querySelector('#movie_player video, .html5-video-player video');
+    if (!video) return;
+    if (video.dataset.cvAdMuted === '1') video.muted = false;
+    delete video.dataset.cvAdMuted;
+  }
+
+  /**
+   * Apply (or undo) ad blocking.
+   *
+   * Runs on every debounced mutation pass as well as on navigation, because the
+   * feed and the player both render ads after the page settles — a one-shot pass
+   * at load would miss most of them.
+   */
+  function applyAds() {
+    const on = adsOn();
+    document.documentElement.classList.toggle(HIDE_ADS_CLASS, on);
+    if (!on) {
+      restoreAdElements();
+      releaseAdMute();
+      return;
+    }
+    removeAdElements();
+    handleVideoAds();
   }
 
   // ── Reading a card ─────────────────────────────────────────────────────
@@ -666,9 +841,10 @@
     if (scanTimer !== null) return;
     scanTimer = window.setTimeout(() => {
       scanTimer = null;
-      // The entry points, the feed and the ⋮ menu are all re-rendered as the
-      // user browses, so one debounced pass keeps them all correct.
+      // The entry points, the feed, the ads and the ⋮ menu are all re-rendered as
+      // the user browses, so one debounced pass keeps them all correct.
       applyShorts();
+      applyAds();
       void scan();
       maybeInjectMenuItem();
       void enforceWatchPage();
@@ -685,11 +861,13 @@
       config.brainBotEnabled,
       config.brainBotMode,
       config.blockShorts,
+      config.blockYoutubeAds,
       config.blockedChannelCount,
     ]);
     if (previous !== '' && next !== previous) reset();
     configSignature = next;
     applyShorts();
+    applyAds();
     await scan();
     void enforceWatchPage();
   }
@@ -716,12 +894,30 @@
 
   const observer = new MutationObserver(scheduleScan);
 
+  /**
+   * A slow heartbeat for the ad pass.
+   *
+   * The mutation observer watches the DOM tree, and the player is marked as
+   * showing an ad by a CLASS change — which adds no child and therefore fires no
+   * mutation. Video ads are also short, so a pass that only ran on mutations
+   * would routinely miss the window in which YouTube's skip control exists.
+   * One second is frequent enough to catch a pre-roll and light enough to ignore.
+   */
+  function startAdHeartbeat() {
+    window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      if (adsOn()) applyAds();
+    }, 1000);
+  }
+
   function start() {
     observer.observe(document.documentElement, { childList: true, subtree: true });
+    startAdHeartbeat();
     window.addEventListener('yt-navigate-finish', () => {
       // A new video is a new channel to check, so the memo has to be cleared.
       lastCheckedWatchUrl = null;
       applyShorts();
+      applyAds();
       scheduleScan();
     });
     document.addEventListener('visibilitychange', () => {

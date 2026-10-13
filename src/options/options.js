@@ -25,6 +25,13 @@ import {
   statusLine,
   switchControl,
 } from '../ui/shared.js';
+import {
+  changeProtectionWithPassword,
+  passwordErrorText,
+  promptToChangePassword,
+  promptToCreatePassword,
+  promptToRemovePassword,
+} from '../ui/password.js';
 
 const content = document.getElementById('content');
 const toastNode = document.getElementById('toast');
@@ -64,6 +71,26 @@ async function patch(next, statusNode) {
   }
 }
 
+/** The Protection switch: free with no password, gated by the worker when one is set. */
+async function toggleProtection(next) {
+  if (!state.passwordSet) {
+    await patch({ protectionEnabled: next });
+    return;
+  }
+  const result = await changeProtectionWithPassword(next);
+  if (result.cancelled) {
+    render();
+    return;
+  }
+  if (result.error) {
+    notify(passwordErrorText(result.error));
+    render();
+    return;
+  }
+  state = result.state;
+  render();
+}
+
 // ── Render ───────────────────────────────────────────────────────────────
 
 function render() {
@@ -81,7 +108,7 @@ function render() {
       icon: protectionOn ? '🔒' : '🔓',
       title: 'Protection',
       subtitle: protectionOn ? 'Active — monitoring websites and searches' : 'Off — nothing is blocked',
-      trailing: switchControl(protectionOn, (value) => patch({ protectionEnabled: value })),
+      trailing: switchControl(protectionOn, toggleProtection),
       detail: [
         'The built-in adult filter, your blocked websites, your keywords and any shared rules all apply while Protection is on.',
         'Turning Protection off stops every block immediately — websites, searches, Shorts and Brain Bot alike.',
@@ -92,6 +119,7 @@ function render() {
 
   // ── YouTube protection ─────────────────────────────────────────────────
   content.append(section('YouTube protection'));
+  content.append(adsCard(protectionOn));
   content.append(brainBotCard(protectionOn));
   content.append(shortsCard(protectionOn));
   content.append(
@@ -170,6 +198,10 @@ function render() {
   content.append(section('Protection activity'));
   content.append(activityCard(stats));
 
+  // ── Security ───────────────────────────────────────────────────────────
+  content.append(section('Security'));
+  content.append(passwordCard());
+
   // ── Advanced ───────────────────────────────────────────────────────────
   content.append(section('Advanced'));
   content.append(serverCard(settings));
@@ -189,6 +221,116 @@ function render() {
 }
 
 // ── Cards ────────────────────────────────────────────────────────────────
+
+/**
+ * YouTube ads.
+ *
+ * The checkbox that makes the feature discoverable and gives it an off switch.
+ * The actual work is two-layered: a declarativeNetRequest ruleset (ad network
+ * requests, refused before they load) and the content script (ad slots removed
+ * from the page, and a video ad skipped). Both follow this switch.
+ */
+function adsCard(protectionOn) {
+  return card({
+    icon: '🚫',
+    title: 'Block YouTube ads',
+    subtitle: 'Blocks ad requests, removes ad slots and skips video ads.',
+    trailing: switchControl(state.settings.blockYoutubeAds, (value) => patch({ blockYoutubeAds: value }), {
+      disabled: !protectionOn,
+    }),
+    detail: [
+      'Ad requests that originate on YouTube are refused before they load, so most ads never arrive.',
+      'Ad slots left in the page are removed, so the feed and the sidebar have no holes or placeholders.',
+      'A video ad that still starts is skipped with YouTube’s own control, or run out for you — the ad is muted while it runs and unmuted the moment the real video resumes.',
+      'Nothing outside YouTube is affected.',
+    ],
+  }).card;
+}
+
+/**
+ * The Protection password.
+ *
+ * Three states, one card: not set (offer to set it), set (change or remove), and
+ * the explanation of what it is. The wording is deliberate — this is a device
+ * lock, not an account, and pretending it were stronger would be a false claim.
+ */
+function passwordCard() {
+  const status = el('div', { class: 'status-line' });
+  const isSet = Boolean(state.passwordSet);
+
+  const actions = [];
+  if (isSet) {
+    actions.push(
+      el('button', {
+        class: 'btn',
+        type: 'button',
+        text: 'Change password',
+        onclick: async () => {
+          const result = await promptToChangePassword();
+          if (!result) return;
+          try {
+            await send('password/change', { current: result.current, next: result.next });
+            state = await send('state/get');
+            render();
+            notify('Password updated.');
+          } catch (error) {
+            statusLine(status, passwordErrorText(error), true);
+          }
+        },
+      }),
+      el('button', {
+        class: 'btn danger',
+        type: 'button',
+        text: 'Remove password',
+        onclick: async () => {
+          const password = await promptToRemovePassword();
+          if (password === null) return;
+          try {
+            state = await send('password/remove', { password });
+            render();
+            notify('Password removed.');
+          } catch (error) {
+            statusLine(status, passwordErrorText(error), true);
+          }
+        },
+      })
+    );
+  } else {
+    actions.push(
+      el('button', {
+        class: 'btn primary',
+        type: 'button',
+        text: 'Create password',
+        onclick: async () => {
+          const password = await promptToCreatePassword({ skipLabel: '' });
+          if (password === null) return;
+          try {
+            state = await send('password/set', { password });
+            render();
+            notify('Password saved.');
+          } catch (error) {
+            statusLine(status, passwordErrorText(error), true);
+          }
+        },
+      })
+    );
+  }
+
+  const node = card({
+    icon: isSet ? '🔐' : '🔓',
+    title: 'Protection password',
+    subtitle: isSet
+      ? `Required to change Protection${state.passwordAt ? ` · set ${relativeTime(state.passwordAt)}` : ''}`
+      : 'Not set — Protection can be changed with one click.',
+    detail: [
+      'The password is asked for whenever Protection is turned on or off from any screen.',
+      'It is stored as a one-way hash on this device only — never synced, and never sent anywhere.',
+      'This is a device lock for a shared machine, not an account: it cannot hide anything from someone with full access to this browser profile.',
+    ],
+  });
+  node.body.append(el('div', { class: 'btn-row' }, actions), status);
+  return node.card;
+}
 
 function brainBotCard(protectionOn) {
   const status = el('div', { class: 'status-line' });
@@ -796,10 +938,44 @@ document.getElementById('open-admin').addEventListener('click', () => {
   chrome.tabs.create({ url: chrome.runtime.getURL('src/admin/admin.html') });
 });
 
+// ── First run ────────────────────────────────────────────────────────────
+
+/**
+ * Offer to set a password on the first visit.
+ *
+ * Shown once. The extension is fully usable without a password, so this is an
+ * offer with a way past it — a wall here would be the wrong trade for a device
+ * lock the user may not want. Either answer is recorded, so it is not asked
+ * again.
+ */
+async function offerPasswordOnFirstRun() {
+  if (!state || state.passwordSet || state.onboarded) return;
+  const password = await promptToCreatePassword({
+    title: 'Welcome to ClearView',
+    message:
+      'Set a password so Protection cannot be switched off by anyone else at this device. You can skip this and add one later.',
+    skipLabel: 'Skip for now',
+  });
+  try {
+    if (password) {
+      state = await send('password/set', { password });
+      render();
+      notify('Password saved.');
+      return;
+    }
+    await send('password/dismissOnboarding');
+    state = await send('state/get');
+    render();
+  } catch (error) {
+    notify(passwordErrorText(error));
+  }
+}
+
 void (async () => {
   await refresh();
   await loadSubmissions(false);
   // Rendered once more AFTER the submissions land, so a channel already sent for
   // review says "Requested" on first paint rather than looking un-asked-for.
   render();
+  await offerPasswordOnFirstRun();
 })();

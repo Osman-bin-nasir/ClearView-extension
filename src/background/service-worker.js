@@ -27,6 +27,15 @@ import {
   removeBlockedChannel,
 } from '../common/channels.js';
 import {
+  clearPassword,
+  getPasswordRecord,
+  hasPassword,
+  isOnboarded,
+  markOnboarded,
+  setPassword,
+  verifyPassword,
+} from '../common/password.js';
+import {
   ApiError,
   adminLogin,
   adminLogout,
@@ -36,7 +45,14 @@ import {
   reportTarget,
   submitSuggestion,
 } from './api.js';
-import { blockTab, evaluateFeedCards, installDomainRules, initBlocker, isChannelBlocked } from './blocking.js';
+import {
+  blockTab,
+  evaluateFeedCards,
+  installAdRules,
+  installDomainRules,
+  initBlocker,
+  isChannelBlocked,
+} from './blocking.js';
 import { syncGlobalRules } from './rules-sync.js';
 import { ensureState, refreshState } from './state.js';
 import {
@@ -68,10 +84,14 @@ async function bootstrap() {
   });
 }
 
-/** Refresh our view of the world and (re-)install the host rules. */
+/** Refresh our view of the world and (re-)install the host and ad rules. */
 async function applyState() {
   const state = await refreshState();
   await installDomainRules(state.bundle?.domains ?? []);
+  // Ads are a second switch under the master one: Protection off means nothing
+  // is blocked at all, so the ad ruleset follows `blockYoutubeAds` only while
+  // Protection is on.
+  await installAdRules(Boolean(state.settings?.protectionEnabled && state.settings?.blockYoutubeAds));
   return state;
 }
 
@@ -225,8 +245,18 @@ function describeBlock(identity, state) {
   return `Blocked ${label}. ${total} channel${total === 1 ? '' : 's'} blocked in ClearView.`;
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   chrome.alarms.create(RULES_ALARM, { periodInMinutes: 180 });
+  // A fresh install is the one moment the password offer makes sense, so open
+  // the settings page where it lives. Guarded: the call is optional (older
+  // Chrome) and a failure here must never abort the boot below.
+  if (details?.reason === 'install') {
+    try {
+      chrome.runtime.openOptionsPage?.();
+    } catch {
+      /* the offer is also in the popup, so nothing is lost */
+    }
+  }
   void bootstrap();
 });
 
@@ -254,9 +284,22 @@ void bootstrap();
 
 async function describeState() {
   const state = await ensureState();
-  const [stats, anonymousId, global] = await Promise.all([getStats(), getAnonymousId(), getGlobalRules()]);
+  const [stats, anonymousId, global, protectedByPassword, onboarded, passwordRecord] = await Promise.all([
+    getStats(),
+    getAnonymousId(),
+    getGlobalRules(),
+    hasPassword(),
+    isOnboarded(),
+    getPasswordRecord(),
+  ]);
   return {
     settings: state.settings,
+    // Whether a Protection password is set on THIS device, and whether the
+    // first-run offer has been answered. The UI needs both to decide between
+    // "offer to set one" and "ask for the one that is set".
+    passwordSet: protectedByPassword,
+    passwordAt: passwordRecord?.at ?? null,
+    onboarded,
     bundleCounts: {
       builtIn: state.bundle.builtIn.length,
       domains: state.bundle.domains.length,
@@ -311,6 +354,7 @@ async function rulesForContent() {
     brainBotEnabled: settings.brainBotEnabled,
     brainBotMode: settings.brainBotMode,
     blockShorts: settings.blockShorts,
+    blockYoutubeAds: settings.blockYoutubeAds,
     // Built-in terms plus the YouTube-scoped set: the app matches feed cards
     // against the always-on filter AND the user's YouTube keywords.
     keywords: bundle.youtube,
@@ -374,10 +418,66 @@ async function adminCall(path, { method = 'GET', body, retry = true } = {}) {
 const handlers = {
   'state/get': async () => describeState(),
 
+  /**
+   * Apply a settings patch.
+   *
+   * Changing PROTECTION is gated here, not in the pages. The switch could be
+   * flipped by a message from any page (or the console), and a lock that only
+   * exists in the UI is a lock that is not there — so the check is in the one
+   * place every change passes through. Anything that is not a Protection change
+   * is free, as before.
+   */
   'settings/update': async (message) => {
-    await updateSettings(message.patch ?? {});
+    const patch = message.patch ?? {};
+    if (Object.prototype.hasOwnProperty.call(patch, 'protectionEnabled') && (await hasPassword())) {
+      const ok = await verifyPassword(message.password ?? '');
+      if (!ok) throw new ApiError('invalid_password', 403, 'Enter your password to change Protection.');
+    }
+    await updateSettings(patch);
     await applyState();
     return describeState();
+  },
+
+  // ── The local Protection password ──────────────────────────────────────
+  'password/status': async () => ({ set: await hasPassword(), onboarded: await isOnboarded() }),
+
+  'password/set': async (message) => {
+    await setPassword(message.password);
+    await markOnboarded();
+    return describeState();
+  },
+
+  /**
+   * Verify a password without changing anything.
+   *
+   * Used by the pages to answer in the dialog itself, so a wrong password is
+   * reported next to the field rather than by a settings write that appears to
+   * fail for no reason.
+   */
+  'password/verify': async (message) => ({ ok: await verifyPassword(message.password) }),
+
+  /** Replace the password, requiring the current one. */
+  'password/change': async (message) => {
+    if (!(await verifyPassword(message.current ?? ''))) {
+      throw new ApiError('invalid_password', 403, 'The current password was not correct.');
+    }
+    await setPassword(message.next);
+    return { set: true };
+  },
+
+  /** Remove the password, requiring it — otherwise the lock removes itself. */
+  'password/remove': async (message) => {
+    if (!(await verifyPassword(message.password ?? ''))) {
+      throw new ApiError('invalid_password', 403, 'Enter your password to remove it.');
+    }
+    await clearPassword();
+    return describeState();
+  },
+
+  /** Record that the first-run offer was dismissed, so it is not shown again. */
+  'password/dismissOnboarding': async () => {
+    await markOnboarded();
+    return { onboarded: true };
   },
 
   'rules/sync': async (message) => {

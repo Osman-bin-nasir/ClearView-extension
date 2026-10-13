@@ -29,6 +29,43 @@ html.cv-hide-shorts yt-chip-cloud-chip-renderer:has([title="Shorts"]) {
   display: none !important;
 }
 
+/* ── YouTube ads ───────────────────────────────────────────────────────── */
+/*
+ * `html.cv-block-ads` is toggled by the content script. This is the first line
+ * of defence: it hides an ad slot the instant it renders, before the JS pass
+ * gets a chance to remove it, so an ad can never flash on screen. The JS pass
+ * removes the in-feed wrappers, which matters because a hidden grid item keeps
+ * its cell and leaves a hole in the feed.
+ */
+
+html.cv-block-ads #masthead-ad,
+html.cv-block-ads #player-ads,
+html.cv-block-ads ytd-ad-slot-renderer,
+html.cv-block-ads ytd-in-feed-ad-layout-renderer,
+html.cv-block-ads ytd-promoted-sparkles-web-renderer,
+html.cv-block-ads ytd-promoted-sparkles-text-search-renderer,
+html.cv-block-ads ytd-promoted-video-renderer,
+html.cv-block-ads ytd-compact-promoted-video-renderer,
+html.cv-block-ads ytd-display-ad-renderer,
+html.cv-block-ads ytd-banner-promo-renderer,
+html.cv-block-ads ytd-statement-banner-renderer,
+html.cv-block-ads ytd-video-masthead-ad-v3-renderer,
+html.cv-block-ads ytd-primetime-promo-renderer,
+html.cv-block-ads .ytp-ad-overlay-slot,
+html.cv-block-ads .ytp-ad-overlay-container,
+html.cv-block-ads .ytp-featured-product,
+html.cv-block-ads ytd-engagement-panel-section-list-renderer[target-id='engagement-panel-ads'] {
+  display: none !important;
+}
+
+/* The "ad" countdown badge, when an ad is playing. The picture itself is dealt
+   with by the script (skip or fast-forward); this only removes the label. */
+html.cv-block-ads .ytp-ad-badge,
+html.cv-block-ads .ytp-ad-text,
+html.cv-block-ads .ytp-ad-simple-ad-badge {
+  display: none !important;
+}
+
 /* ── Brain Bot protection overlay ──────────────────────────────────────── */
 
 .cv-block-overlay {

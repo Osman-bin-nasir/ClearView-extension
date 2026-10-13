@@ -16,6 +16,7 @@
  * Both consult the same bundle, so they cannot disagree about what is blocked.
  */
 
+import { AD_RULESET_ID } from '../common/constants.js';
 import { MatchType, checkString } from '../common/matching.js';
 import { SAFE_SEARCH_DESTINATION, isShortsUrl, parseSearchUrl } from '../common/search-engines.js';
 import { channelIdentity, matchBlockedChannel, parseChannelUrl } from '../common/channels.js';
@@ -187,6 +188,38 @@ export async function installDomainRules(domains) {
     // Not fatal: the navigation evaluator still catches these hosts in JS (its
     // domain check uses the same list). Logged so a rules mismatch is visible.
     console.warn('[clearview] could not install domain rules:', error?.message);
+  }
+}
+
+// ── DNR ad rules ─────────────────────────────────────────────────────────
+
+/**
+ * Turn the YouTube ad network ruleset on or off.
+ *
+ * The ad rules live in a STATIC ruleset (declared in the manifest, shipped as a
+ * file) rather than in JS, because that is what MV3 wants: a fixed list of ad
+ * hosts, evaluated by the browser before a request is made, with no script able
+ * to forget to run. The toggle only flips the ruleset's enabled state, so
+ * turning ad blocking off cannot leave a stray rule behind and turning it on
+ * cannot half-apply.
+ *
+ * The ruleset is scoped (in its own conditions) to requests that ORIGINATE on
+ * YouTube, so it can never touch the same ad network on an unrelated site.
+ *
+ * @returns {Promise<boolean>} whether the ruleset is now in the requested state
+ */
+export async function installAdRules(enabled) {
+  if (!chrome.declarativeNetRequest?.updateEnabledRulesets) return false;
+  try {
+    await chrome.declarativeNetRequest.updateEnabledRulesets(
+      enabled ? { enableRulesetIds: [AD_RULESET_ID] } : { disableRulesetIds: [AD_RULESET_ID] }
+    );
+    return true;
+  } catch (error) {
+    // Not fatal, but worth a record: the toggle promises something that would
+    // not be happening, and the console is where that is visible.
+    console.warn('[clearview] could not update the ad ruleset:', error?.message);
+    return false;
   }
 }
 

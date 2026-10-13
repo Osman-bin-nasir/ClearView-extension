@@ -8,6 +8,13 @@ workflow.
 
 - Blocks explicit websites and searches using the **same rules and the same
   matching engine** as the Android app.
+- **Blocks YouTube ads** — the ad network requests are refused before they load,
+  the ad slots are removed from the page, and a video ad that still starts is
+  skipped (or run out) without touching the video you are watching. One toggle
+  turns the whole thing off.
+- **An optional Protection password.** After install the extension offers to set
+  one, and once it is set, turning Protection on or off asks for it. It is a
+device lock, not an account — see §12.
 - Hides the **YouTube Shorts** entry point **and** blocks Shorts links, matching
   the app's `blockShorts` control.
 - **Block a YouTube channel** from a video's ⋮ menu or by right-clicking a
@@ -21,6 +28,8 @@ workflow.
   blocklist.
 - A **protected admin dashboard** for reviewing, approving and rejecting
   submissions (server-enforced authorization).
+- A **minimalist interface** — one accent, a neutral surface scale, generous
+  spacing and a soft shadow, on the popup, the settings page and the dashboard.
 
 ---
 
@@ -46,8 +55,10 @@ Open **Full settings** (or `chrome://extensions` → *Extension options*).
 
 | Setting | Purpose |
 | --- | --- |
-| **Protection** | Master switch. Off means nothing is blocked at all. |
+| **Protection** | Master switch. Off means nothing is blocked at all. Gated by the password once one is set. |
+| **Protection password** | Optional device lock. Set it to stop Protection being switched off in one click. |
 | **Strict Mode** | Adds the app's discovery terms (bikini, lingerie, …). |
+| **Block YouTube ads** | Refuses YouTube ad requests, removes ad slots, and skips video ads. On by default. |
 | **Block YouTube Shorts** | Hides the Shorts entry point and blocks Shorts links (app parity). |
 | **Brain Bot Protection** | Filters YouTube feed cards. Choose *Remove from feed* or *Show protection overlay*. |
 | **Blocked websites / keywords** | Your own rules. Keywords apply to every site and search. |
@@ -57,8 +68,9 @@ Open **Full settings** (or `chrome://extensions` → *Extension options*).
 | **Anonymous identity** | The random install id your contributions are sent with. |
 
 Everything is stored in `chrome.storage.sync` (settings) and
-`chrome.storage.local` (caches, identity), so settings persist across browser
-restarts and follow a signed-in Chrome profile.
+`chrome.storage.local` (caches, identity, and the Protection password hash — a
+credential is not synced), so settings persist across browser restarts and
+follow a signed-in Chrome profile.
 
 ---
 
@@ -73,6 +85,8 @@ Two mechanisms, chosen for what each is good at:
    anything needing real string work: keywords inside a URL, and the user's
    search query. These use the app's normalization and whole-word rules, which a
    DNR `urlFilter` cannot express.
+3. **A static `declarativeNetRequest` ruleset** for YouTube ads (see §4.1),
+   toggled on and off by the ad switch.
 
 **Search blocking** parses the query out of supported search-engine URLs (Google,
 Bing, DuckDuckGo and YouTube — see `src/common/search-engines.js`), matches it
@@ -130,6 +144,41 @@ the worker's — and keeps a page from holding the rule set.
   by an overlay, per the chosen mode. YouTube is a single-page app, so changes are
   re-applied on `yt-navigate-finish` and on DOM mutations (debounced), and every
   card is marked once handled — an overlay can never be stacked twice.
+
+### YouTube ads
+
+The ad blocker follows the model every YouTube ad blocker uses — refuse the ad
+where it is fetched, remove it where it still appears — and adds the one thing a
+network filter cannot do on its own: get rid of the ad that YouTube serves from
+its own origin.
+
+Three layers, each covering what the one before it cannot:
+
+1. **Ad requests are refused** by a static `declarativeNetRequest` ruleset
+   (`src/background/rules/youtube-ads.json`, ruleset id `youtube_ads`). This is
+   the AdBlock-for-YouTube approach: the ad never arrives, so nothing has to be
+   hidden afterwards. The rules are in a FILE, not in JS, and every rule is
+   scoped with `initiatorDomains: youtube.com…` — so the same ad network is left
+   alone on unrelated sites, and no top-level navigation is ever blocked.
+2. **Ad slots are removed from the page** by the content script. The stylesheet
+   hides every known ad container under `html.cv-block-ads` (instant, and
+   independent of the script's timing), and the script then takes the in-feed
+   ads out of the DOM *with their grid wrapper* — because a hidden grid item
+   keeps its cell and leaves a hole in the feed. Removed nodes are remembered, so
+   the switch is reversible.
+3. **A video ad that still starts is skipped.** YouTube's own skip control is
+   clicked the moment it exists; an overlay/banner ad is dismissed by its close
+   button; and an unskippable ad is fast-forwarded to its end. The pass runs on a
+   one-second heartbeat as well as on DOM mutations, because an ad is announced
+   by a *class* change on the player, which fires no mutation — a pass driven by
+   the observer alone would routinely miss it.
+
+The mute that the unskippable path applies is recorded on the element and undone
+the moment the ad ends, so the video the user came to watch is never left silent.
+
+The toggle (`blockYoutubeAds`) follows the same rule as the other content
+controls: it is inert while **Protection** is off, and the ruleset is enabled by
+the worker (`installAdRules`) rather than by a page.
 
 ### Blocking a channel
 
@@ -303,15 +352,19 @@ current design avoids needing that at all.
 
 | Permission | Why it is needed |
 | --- | --- |
-| `storage` | Settings, cached rules, stats, anonymous id. |
+| `storage` | Settings, cached rules, stats, anonymous id, and the local password hash. |
 | `webNavigation` | To see a navigation's URL and redirect it before the page loads. |
-| `declarativeNetRequest` | Dynamic host-blocking rules. |
+| `declarativeNetRequest` | Dynamic host-blocking rules, and the static YouTube ad ruleset. |
 | `alarms` | Periodic shared-blocklist refresh. |
 | `contextMenus` | The right-click *Block this channel* entry. |
 | `host_permissions: https://clearview-1neb.onrender.com/*` | Reaching the API from the worker. |
 | `optional_host_permissions: https://*/*` | Requested only if you point the extension at your own server. |
 
 Content scripts are limited to `*://*.youtube.com/*`.
+
+The ad ruleset is declared in `declarative_net_request.rule_resources` with
+`"enabled": false`, so it costs nothing until the ad switch turns it on and
+nothing at all once Protection is off.
 
 ---
 
@@ -321,7 +374,7 @@ Content scripts are limited to `*://*.youtube.com/*`.
 npm test        # node --test "tests/**/*.test.js"
 ```
 
-108 tests, covering:
+177 tests, covering:
 
 - **`tests/matching.test.js`** — normalization (fullwidth, leetspeak, separator
   and spaced forms), whole-word boundaries, domain matching, the three tiers, and
@@ -350,6 +403,24 @@ npm test        # node --test "tests/**/*.test.js"
   (adult hosts, keyword-in-URL, explicit vs. normal searches, Strict Mode,
   community rules), plus a live check of the deployed backend's `/rules`
   contract, which skips automatically if the network is unavailable.
+- **`tests/ads.test.js`** — the ad blocker's seams: the manifest ruleset exists
+  and starts disabled, every rule blocks and is scoped to YouTube (and never to
+  `main_frame`), the ad networks that actually serve YouTube are covered, the
+  worker enables the ruleset from the setting under the master switch, the
+  content pass removes AND restores, the skip/fast-forward/mute paths are
+  present, and the Protection change is gated in the worker rather than the UI.
+- **`tests/password.test.js`** — the local password: no plaintext is ever
+  stored, the right password verifies and the wrong one does not, the same
+  password hashes differently on every write (per-install salt), replacing it
+  invalidates the old one, and length is counted in code points.
+- **`tests/password-gate.test.js`** — the **real** worker, driven by message:
+  the ad ruleset is switched on at boot, follows the ad switch under the master
+  one, and is disabled when Protection goes off; and changing Protection is
+  refused without the password, refused with the wrong one, and applied with the
+  right one — while every other setting stays free.
+- **`tests/ui-render.test.js`** — the popup and the settings page rendered for
+  real against a small DOM shim: the hero, the ad toggle, the first-run password
+  offer, the password card, and the dialog's mismatch/cancel/retry behaviour.
 
 ### Manual acceptance checklist
 
@@ -359,6 +430,9 @@ npm test        # node --test "tests/**/*.test.js"
 | Explicit search redirected, no query carried | Search an explicit term → lands on Google with no query in the URL. |
 | Normal searches unaffected | Search anything ordinary. |
 | Shorts entry point hidden **and** Shorts links blocked | Toggle on, reload YouTube, open a `/shorts/…` link. |
+| **YouTube ads blocked** | With the toggle on, reload YouTube: no pre-roll, no feed/sidebar ad slots, no banner. Turn it off and the ad slots return on the next reload. |
+| **First-run password offer** | On a fresh install the settings page offers to set a password; skipping it does not ask again. |
+| **Protection gated by the password** | With a password set, flip Protection on the popup — it asks for the password, and a wrong one changes nothing. |
 | Brain Bot remove / overlay | Toggle each mode on a home feed. |
 | Dynamic navigation | Scroll the feed; overlays must not duplicate. |
 | **Block a channel from ⋮** | Open a video, use the ⋮ menu → *Block this channel*; the entry then reads *Unblock this channel*. |
@@ -377,16 +451,18 @@ manifest.json                 MV3 manifest
 src/
   common/                     Pure, testable logic (no Chrome APIs)
     matching.js               Ported KeywordMatcher: normalization + tiers
-    rules/                    GENERATED built-in rules (from BlockRepository.kt)
+      rules/                    GENERATED built-in rules (from BlockRepository.kt)
     rules-bundle.js           Effective rules = built-in + user + community
     channels.js               Channel identity: URL parsing + block-list matching
     search-engines.js         Search-URL parsing + safe destination
     constants.js              Storage keys, defaults, endpoints, source enum
     settings.js               chrome.storage access
+    password.js               The local Protection password: hash, verify, store
     env.config.js             GENERATED from .env by `npm run config`
   background/                 Service worker
-    service-worker.js         Boot, message router, admin session
-    blocking.js               DNR host rules + navigation evaluator
+    service-worker.js         Boot, message router, admin session, password gate
+    blocking.js               DNR host rules + ad ruleset + navigation evaluator
+    rules/youtube-ads.json    Static DNR ruleset: the YouTube ad networks
     context-menus.js          The right-click "Block this channel" entry
     rules-sync.js             Versioned/TTL shared-blocklist cache
     api.js                    Backend client (public + admin)
@@ -397,6 +473,9 @@ src/
   admin/                      Protected moderation dashboard
   blocked/                    Blocked destination page
   ui/                         Shared design system + helpers
+    theme.css                 The minimalist design system (light + dark)
+    shared.js                 DOM builder, cards, hero, toast
+    password.js               The password dialog and first-run offer
 scripts/
   extract-builtin-rules.mjs   Regenerate rules from the Android app
   make-icons.mjs              Generate the PNG icons (no dependencies)
@@ -415,6 +494,8 @@ tests/                        node --test suite
   short-lived token held by the worker.
 - Admin permissions are enforced **server-side**; the client is never trusted for
   authorization.
+- The Protection password is stored as a salted PBKDF2-SHA256 hash on the device
+  only. No password, secret or service-account key is bundled in the extension.
 - A failed backend call degrades to the cached rules and never silently disables
   a protection that is switched on.
 
@@ -441,6 +522,44 @@ tests/                        node --test suite
   accessibility-only behaviours (incognito-browsing blocking, in-app WebView
   interception, device-admin and DNS controls) have no browser equivalent and are
   not part of the extension.
+- **Ad blocking is a moving target.** YouTube changes its ad delivery often, so
+  the ruleset and the ad selectors will need updating from time to time. The
+  three layers degrade independently — losing the selectors still leaves the
+  network rules working — and the toggle is the honest off switch when a change
+  breaks something.
+- **A YouTube ad can still flash for a moment.** The ruleset and the stylesheet
+  are what prevent that, but an ad served from YouTube's own origin can render a
+  frame before the content pass acts. Skipping is reactive by nature.
+- **The password is a device lock.** It is not authentication, and it does not
+  survive clearing the extension's data — see §12.
 - Community keywords are distributed after a refresh (TTL 6 h, or on demand), so
   a newly approved rule may take up to that long to appear on a device that is
   not manually refreshed.
+- The removed YouTube ad nodes are restored when the toggle is turned off, but
+  the page is a single-page app: a slot YouTube re-rendered after the toggle
+  changed comes back only on the next navigation.
+
+---
+
+## 12. The Protection password
+
+An optional lock on the **Protection** switch, offered once after install
+(`src/common/password.js`, `src/ui/password.js`).
+
+- **What it guards.** Turning Protection on or off, from any screen. The check
+  is in the service worker's `settings/update` — the one path every change goes
+  through — so it cannot be bypassed by a page that skips the dialog.
+- **What it is not.** A device lock, not an account and not authentication. It
+  stops a one-click change on a shared or borrowed machine. It cannot hide
+  anything from someone with full access to the browser profile, and the UI says
+  so rather than implying otherwise.
+- **How it is stored.** Never the password itself: a random 16-byte salt and a
+  PBKDF2-SHA256 hash (120,000 iterations), written to `chrome.storage.local`.
+  Local and not synced, because a credential has no business travelling to
+  another machine with the settings. Verification is a constant-time comparison,
+  and every failure returns the same answer.
+- **Creating, changing and removing it.** Offered in the settings page's
+  *Security* section and as a first-run offer. Changing or removing it requires
+  the current password, so the lock cannot remove itself; forgetting it means
+  clearing the extension's storage, which is stated plainly rather than dressed
+  up as a recovery flow.

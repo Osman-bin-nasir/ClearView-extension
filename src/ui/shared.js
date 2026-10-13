@@ -82,6 +82,38 @@ export function section(label) {
   return el('div', { class: 'section' }, [el('span', { class: 'section-label', text: label })]);
 }
 
+/**
+ * The popup's protection summary: a state mark, a title and one line of status.
+ *
+ * @param {{ on: boolean, title: string, subtitle: string, trailing?: Node }} options
+ */
+export function hero({ on, icon, title, subtitle, trailing = null }) {
+  return el('div', { class: `hero${on ? ' on' : ''}` }, [
+    el('div', { class: 'hero-head' }, [
+      el('div', { class: 'hero-mark', text: icon, 'aria-hidden': 'true' }),
+      el('div', { class: 'card-titles' }, [
+        el('div', { class: 'hero-title', text: title }),
+        el('div', { class: 'hero-sub', text: subtitle }),
+      ]),
+      trailing,
+    ]),
+  ]);
+}
+
+/** A transient message, for outcomes that have no place of their own to live. */
+let toastTimer = null;
+export function toast(text) {
+  if (typeof text !== 'string' || text.trim() === '') return;
+  let node = document.querySelector('.toast');
+  if (!node) {
+    node = el('div', { class: 'toast', role: 'status', 'aria-live': 'polite' });
+    document.body.append(node);
+  }
+  node.textContent = text;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => node.remove(), 3200);
+}
+
 export function pill(text, kind = '') {
   return el('span', { class: `pill ${kind}`.trim(), text });
 }
@@ -107,6 +139,12 @@ export function relativeTime(timestamp) {
 /** Turn a backend error into a sentence that says nothing it should not. */
 export function errorMessage(error) {
   switch (error?.code) {
+    case 'invalid_password':
+      return 'That password was not correct.';
+    case 'password_too_short':
+      return 'Use at least 4 characters for your password.';
+    case 'password_too_long':
+      return 'That password is too long.';
     case 'network_unavailable':
       return 'Could not reach the server. Nothing changed.';
     case 'invalid_anonymous_id':

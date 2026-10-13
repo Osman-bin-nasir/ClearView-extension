@@ -53,6 +53,14 @@ export const STORAGE = Object.freeze({
   stats: 'cv.stats',
   /** Admin bearer/refresh tokens and identity. Never a bundled secret. */
   adminSession: 'cv.adminSession',
+  /**
+   * The local protection password record (salt + PBKDF2 hash). Local, never
+   * synced: it is a lock on THIS device, and a credential has no business
+   * travelling to another machine with the settings.
+   */
+  password: 'cv.password',
+  /** Whether the first-run password offer has been answered (create or skip). */
+  onboarded: 'cv.onboarded',
 });
 
 /**
@@ -70,6 +78,13 @@ export const DEFAULT_SETTINGS = Object.freeze({
   strictMode: false,
   /** Hide the YouTube Shorts entry point. Never blocks Shorts URLs. */
   blockShorts: false,
+  /**
+   * Strip YouTube ads: network ad requests are refused, the ad slots are removed
+   * from the page, and a video ad is skipped where YouTube allows it. On by
+   * default, because it is the one control that only ever removes something the
+   * user did not ask to see.
+   */
+  blockYoutubeAds: true,
   /** Brain Bot (Brain Rot) protection on YouTube feeds. */
   brainBotEnabled: false,
   /** 'remove' hides matching cards; 'overlay' covers them in place. */
@@ -124,6 +139,24 @@ export const DEFAULT_SUBMISSION_SOURCE = 'unknown';
 export function coerceSubmissionSource(value) {
   return SUBMISSION_SOURCES.includes(value) ? value : DEFAULT_SUBMISSION_SOURCE;
 }
+
+/**
+ * The YouTube ad blocking surface.
+ *
+ * Kept next to the other constants so the content script, the ruleset file and
+ * the tests all name the same ruleset id — a typo in either would leave the
+ * toggle looking on while nothing is blocked, which is the one failure mode that
+ * cannot be seen from the UI.
+ */
+export const AD_RULESET_ID = 'youtube_ads';
+
+/** How long a password must be, and the hashing parameters it is stored with. */
+export const PASSWORD = Object.freeze({
+  minLength: 4,
+  maxLength: 128,
+  iterations: 120_000,
+  algorithm: 'PBKDF2-SHA256',
+});
 
 /** The submission statuses the backend can return, plus the derived "removed". */
 export const SUBMISSION_STATUS = Object.freeze({

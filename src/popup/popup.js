@@ -1,11 +1,13 @@
 /**
  * The popup — the Block tab, in miniature.
  *
- * It shows the same sections, in the same order, as the Android Block tab, and
- * every control writes the same setting the options page does. Where the app has
- * a whole screen for something (the keyword manager, the review queue), the popup
- * shows the count and links out, so it stays a quick switchboard rather than a
- * cramped copy.
+ * A minimalist switchboard: one hero that says whether Protection is on, then
+ * the controls a user reaches for mid-browse (ads, Shorts, Brain Bot), then the
+ * lists they occasionally add to. Everything that needs explaining — the
+ * moderation queue, the server, the identity — stays in the full settings page.
+ *
+ * Every write goes through the worker, and a Protection change is gated by the
+ * local password there, not here. This page only collects the password.
  */
 
 import { BRAIN_BOT_MODES } from '../common/constants.js';
@@ -15,15 +17,21 @@ import {
   clear,
   el,
   errorMessage,
+  hero,
   relativeTime,
   section,
   send,
   statusLine,
   switchControl,
+  toast,
 } from '../ui/shared.js';
+import {
+  changeProtectionWithPassword,
+  passwordErrorText,
+  promptToCreatePassword,
+} from '../ui/password.js';
 
 const content = document.getElementById('content');
-const protectionStatus = document.getElementById('protection-status');
 
 let state = null;
 
@@ -33,81 +41,92 @@ async function refresh() {
     render();
   } catch (error) {
     clear(content);
-    content.append(
-      el('div', { class: 'card' }, [el('div', { class: 'empty', text: errorMessage(error) })])
-    );
+    content.append(el('div', { class: 'card' }, [el('div', { class: 'empty', text: errorMessage(error) })]));
   }
 }
 
 /** Apply a settings patch, re-render, and report failures inline. */
-async function patch(next, statusNode) {
+async function patch(next, statusNode, password) {
   try {
-    state = await send('settings/update', { patch: next });
+    const message = { patch: next };
+    if (password !== undefined) message.password = password;
+    state = await send('settings/update', message);
     render();
     return true;
   } catch (error) {
     if (statusNode) statusLine(statusNode, errorMessage(error), true);
+    else toast(errorMessage(error));
     return false;
   }
 }
 
+/** The hero's switch: free when no password is set, gated when one is. */
+async function toggleProtection(next) {
+  if (!state.passwordSet) {
+    await patch({ protectionEnabled: next });
+    return;
+  }
+  const result = await changeProtectionWithPassword(next);
+  if (result.cancelled) {
+    render(); // put the switch back where it was
+    return;
+  }
+  if (result.error) {
+    toast(passwordErrorText(result.error));
+    render();
+    return;
+  }
+  state = result.state;
+  render();
+}
+
 function render() {
   const { settings, global: globalRules, stats, bundleCounts } = state;
-
-  protectionStatus.textContent = settings.protectionEnabled
-    ? 'Protection active — monitoring websites and searches'
-    : 'Protection is off';
-
-  clear(content);
   const protectionOn = settings.protectionEnabled;
 
-  // ── Protection ─────────────────────────────────────────────────────────
+  clear(content);
+
+  // ── Hero ───────────────────────────────────────────────────────────────
+  content.append(
+    hero({
+      on: protectionOn,
+      icon: protectionOn ? '🛡' : '⚠️',
+      title: protectionOn ? 'Protection is on' : 'Protection is off',
+      subtitle: protectionOn ? 'Websites and searches are being checked' : 'Nothing is being blocked',
+      trailing: switchControl(protectionOn, toggleProtection),
+    })
+  );
+
+  // ── Password offer ─────────────────────────────────────────────────────
+  // Offered on the first run only. After that it lives in the settings page's
+  // Security section, so the popup is not a nag every time it is opened.
+  if (!state.passwordSet && !state.onboarded) {
+    content.append(passwordOfferCard());
+  }
+
+  // ── YouTube protection ─────────────────────────────────────────────────
+  content.append(section('YouTube'));
+
   content.append(
     card({
-      icon: '🔒',
-      title: 'Protection',
-      subtitle: protectionOn ? 'Active — blocking websites and searches' : 'Off — nothing is blocked',
-      trailing: switchControl(protectionOn, (value) => patch({ protectionEnabled: value })),
+      icon: '🚫',
+      title: 'Block YouTube ads',
+      subtitle: 'Blocks ad requests, removes ad slots and skips video ads.',
+      trailing: switchControl(settings.blockYoutubeAds, (value) => patch({ blockYoutubeAds: value }), {
+        disabled: !protectionOn,
+      }),
       detail: [
-        'Built-in adult filter — always on while Protection is on.',
-        `Blocked hosts: ${bundleCounts.domains} · keywords: ${bundleCounts.builtIn + bundleCounts.everywhere}`,
-        'Your own keywords apply alongside the built-in ones.',
+        'Ad network requests are refused before they load, and the ad slots are taken out of the page.',
+        'A video ad that still starts is skipped, or run out for you, without touching the video you came to watch.',
+        'Only requests that originate on YouTube are affected.',
       ],
     }).card
   );
 
-  // ── YouTube protection ─────────────────────────────────────────────────
-  content.append(section('YouTube protection'));
-
-  const brainBot = card({
-    icon: '🧠',
-    title: 'Brain Bot Protection',
-    subtitle: 'Filter unwanted videos from YouTube feeds.',
-    trailing: switchControl(settings.brainBotEnabled, (value) => patch({ brainBotEnabled: value }), {
-      disabled: !protectionOn,
-    }),
-  });
-  if (settings.brainBotEnabled) {
-    const status = el('div', { class: 'status-line' });
-    const group = el('div', { class: 'toggle-group' }, [
-      ...BRAIN_BOT_MODES.map((mode) =>
-        el('button', {
-          class: `btn ${settings.brainBotMode === mode.value ? 'selected' : ''}`,
-          type: 'button',
-          text: mode.label,
-          title: mode.description,
-          onclick: () => patch({ brainBotMode: mode.value }, status),
-        })
-      ),
-    ]);
-    brainBot.body.append(group, status);
-  }
-  content.append(brainBot.card);
-
   content.append(
     card({
-      icon: '▶️',
-      title: 'Block YouTube Shorts',
+      icon: '📱',
+      title: 'Hide YouTube Shorts',
       subtitle: 'Hides the Shorts entry point and blocks Shorts links.',
       trailing: switchControl(settings.blockShorts, (value) => patch({ blockShorts: value }), {
         disabled: !protectionOn,
@@ -115,10 +134,37 @@ function render() {
     }).card
   );
 
+  const brainBot = card({
+    icon: '🧠',
+    title: 'Brain Bot Protection',
+    subtitle: 'Filters unwanted videos from YouTube feeds.',
+    trailing: switchControl(settings.brainBotEnabled, (value) => patch({ brainBotEnabled: value }), {
+      disabled: !protectionOn,
+    }),
+  });
+  if (settings.brainBotEnabled) {
+    const status = el('div', { class: 'status-line' });
+    brainBot.body.append(
+      el('div', { class: 'toggle-group' }, [
+        ...BRAIN_BOT_MODES.map((mode) =>
+          el('button', {
+            class: `btn ${settings.brainBotMode === mode.value ? 'selected' : ''}`,
+            type: 'button',
+            text: mode.label,
+            title: mode.description,
+            onclick: () => patch({ brainBotMode: mode.value }, status),
+          })
+        ),
+      ]),
+      status
+    );
+  }
+  content.append(brainBot.card);
+
   content.append(blockedChannelsCard(protectionOn));
 
   // ── My blocked items ───────────────────────────────────────────────────
-  content.append(section('My blocked items'));
+  content.append(section('My rules'));
 
   content.append(
     card({
@@ -131,50 +177,147 @@ function render() {
     }).card
   );
 
-  content.append(blockedSitesCard());
-  content.append(keywordCard());
+  content.append(listCard({
+    icon: '🌐',
+    title: 'Blocked websites',
+    subtitle: 'Blocked everywhere you browse.',
+    placeholder: 'e.g. youtube.com',
+    items: settings.blockedDomains,
+    onAdd: (value) => {
+      const domain = normalizeDomain(value);
+      if (!domain) return { error: 'Enter a website like example.com.' };
+      if (settings.blockedDomains.includes(domain)) return { error: 'That website is already blocked.' };
+      return { patch: { blockedDomains: [...settings.blockedDomains, domain] } };
+    },
+    onRemove: (item) => patch({ blockedDomains: settings.blockedDomains.filter((d) => d !== item) }),
+  }));
+
+  content.append(listCard({
+    icon: '🔤',
+    title: 'Blocked keywords',
+    subtitle: 'Blocked on every website and search.',
+    placeholder: 'e.g. instagram, tiktok',
+    items: settings.userKeywords,
+    onAdd: (value) => {
+      const keyword = value.trim().toLowerCase().replace(/\s+/g, ' ');
+      if (keyword === '' || keyword.length > 80) return { error: 'Enter 1 to 80 characters.' };
+      if (settings.userKeywords.includes(keyword)) return { error: 'That keyword is already blocked.' };
+      return { patch: { userKeywords: [...settings.userKeywords, keyword] } };
+    },
+    onRemove: (item) => patch({ userKeywords: settings.userKeywords.filter((k) => k !== item) }),
+  }));
 
   // ── Shared blocklist ───────────────────────────────────────────────────
-  content.append(section('Shared blocklist'));
+  content.append(section('Community'));
   content.append(globalRulesCard(globalRules));
 
   // ── Activity ───────────────────────────────────────────────────────────
-  content.append(section('Protection activity'));
-  const resetStatus = el('div', { class: 'status-line' });
-  const activity = card({
-    icon: '📊',
-    title: 'Recent activity',
-    subtitle: `${stats.total ?? 0} item${(stats.total ?? 0) === 1 ? '' : 's'} blocked on this device`,
+  content.append(section('Activity'));
+  content.append(activityCard(stats));
+}
+
+/** The first-run offer: set a password so Protection is not a one-click change. */
+function passwordOfferCard() {
+  const status = el('div', { class: 'status-line' });
+
+  const dismiss = async () => {
+    try {
+      await send('password/dismissOnboarding');
+      state = await send('state/get');
+      render();
+    } catch (error) {
+      statusLine(status, passwordErrorText(error), true);
+    }
+  };
+
+  const node = card({
+    icon: '🔐',
+    title: 'Protect your settings',
+    subtitle: 'Set a password so Protection cannot be switched off by anyone at this device.',
     trailing: el('button', {
-      class: 'btn small',
+      class: 'btn primary small',
       type: 'button',
-      text: 'Reset',
+      text: 'Set password',
       onclick: async () => {
+        const password = await promptToCreatePassword();
+        if (password === null) return;
         try {
-          state = await send('stats/reset');
+          state = await send('password/set', { password });
           render();
+          toast('Password saved.');
         } catch (error) {
-          statusLine(resetStatus, errorMessage(error), true);
+          statusLine(status, passwordErrorText(error), true);
         }
       },
     }),
   });
-  activity.body.append(
-    el('div', {
-      class: 'empty',
-      text: stats.lastAt ? `Last blocked ${relativeTime(stats.lastAt)}.` : 'Nothing blocked yet. Protection is watching.',
-    }),
-    resetStatus
+  node.body.append(
+    el('div', { class: 'btn-row' }, [
+      el('button', { class: 'btn small', type: 'button', text: 'Not now', onclick: dismiss }),
+    ]),
+    status
   );
-  content.append(activity.card);
+  return node.card;
+}
+
+/** A card with an add field and removable chips, shared by the two lists. */
+function listCard({ icon, title, subtitle, placeholder, items, onAdd, onRemove }) {
+  const status = el('div', { class: 'status-line' });
+  const chips = el('div', { class: 'chip-list' });
+
+  if (!items || items.length === 0) {
+    chips.append(el('div', { class: 'empty', text: 'Nothing here yet. Add one below.' }));
+  } else {
+    for (const item of items) {
+      chips.append(
+        el('span', { class: 'chip' }, [
+          item,
+          el('button', {
+            type: 'button',
+            text: '✕',
+            'aria-label': `Remove ${item}`,
+            onclick: () => onRemove(item),
+          }),
+        ])
+      );
+    }
+  }
+
+  const input = el('input', { class: 'input', placeholder });
+  const submit = async () => {
+    if (input.value.trim() === '') {
+      statusLine(status, 'Type something to add.', true);
+      return;
+    }
+    const outcome = onAdd(input.value);
+    if (outcome?.error) {
+      statusLine(status, outcome.error, true);
+      return;
+    }
+    input.value = '';
+    await patch(outcome.patch, status);
+  };
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') void submit();
+  });
+
+  const node = card({ icon, title, subtitle });
+  node.body.append(
+    chips,
+    el('div', { class: 'field-row popup-field' }, [
+      input,
+      el('button', { class: 'btn primary', type: 'button', text: 'Add', onclick: submit }),
+    ]),
+    status
+  );
+  return node.card;
 }
 
 /**
  * The blocked channels, with a one-tap unblock.
  *
- * Read-only apart from removal on purpose: the popup is a switchboard, and the
- * decisions that need explaining — asking an administrator to block a channel
- * for everyone — live in the full settings page.
+ * Removal only, on purpose: asking for a global block is a decision that needs
+ * the explanation the full settings page gives it.
  */
 function blockedChannelsCard(protectionOn) {
   const channels = state.blockedChannels ?? [];
@@ -193,7 +336,7 @@ function blockedChannelsCard(protectionOn) {
             type: 'button',
             text: '✕',
             'aria-label': `Unblock ${label}`,
-            disabled: protectionOn ? false : true,
+            disabled: !protectionOn,
             onclick: async () => {
               try {
                 state = await send('channel/unblock', { label });
@@ -213,131 +356,11 @@ function blockedChannelsCard(protectionOn) {
     title: 'Blocked channels',
     subtitle:
       channels.length === 0
-        ? 'None blocked yet.'
+        ? 'Block one from a video’s ⋮ menu.'
         : `${channels.length} blocked — hidden from feeds, and their pages will not open.`,
-    detail: [
-      'Block a channel from any video’s ⋮ menu, or by right-clicking a thumbnail.',
-      'Full settings is where you can ask an administrator to block one for everyone.',
-    ],
   });
   node.body.append(chips, status);
   return node.card;
-}
-
-/** The user's blocked hostnames, with an inline add field. */
-function blockedSitesCard() {
-  const { settings } = state;
-  const status = el('div', { class: 'status-line' });
-  const chips = el('div', { class: 'chip-list' });
-
-  if (settings.blockedDomains.length === 0) {
-    chips.append(el('div', { class: 'empty', text: 'No websites blocked yet. Add one below.' }));
-  } else {
-    for (const domain of settings.blockedDomains) {
-      chips.append(
-        el('span', { class: 'chip' }, [
-          domain,
-          el('button', {
-            type: 'button',
-            text: '✕',
-            'aria-label': `Unblock ${domain}`,
-            onclick: () => patch({ blockedDomains: settings.blockedDomains.filter((d) => d !== domain) }, status),
-          }),
-        ])
-      );
-    }
-  }
-
-  const input = el('input', { class: 'input', placeholder: 'e.g. youtube.com', id: 'add-domain' });
-  const submit = async () => {
-    const domain = normalizeDomain(input.value);
-    if (!domain) {
-      statusLine(status, 'Enter a website like example.com.', true);
-      return;
-    }
-    if (settings.blockedDomains.includes(domain)) {
-      statusLine(status, 'That website is already blocked.');
-      return;
-    }
-    input.value = '';
-    await patch({ blockedDomains: [...settings.blockedDomains, domain] }, status);
-  };
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') void submit();
-  });
-
-  const cardNode = card({
-    icon: '🚫',
-    title: 'Blocked websites',
-    subtitle: 'Blocked everywhere you browse.',
-  });
-  cardNode.body.append(
-    chips,
-    el('div', { class: 'field-row popup-field' }, [
-      input,
-      el('button', { class: 'btn primary', type: 'button', text: 'Block', onclick: submit }),
-    ]),
-    status
-  );
-  return cardNode.card;
-}
-
-/** The user's own keywords, with an inline add field. */
-function keywordCard() {
-  const { settings } = state;
-  const status = el('div', { class: 'status-line' });
-  const chips = el('div', { class: 'chip-list' });
-
-  if (settings.userKeywords.length === 0) {
-    chips.append(el('div', { class: 'empty', text: 'No keywords yet. Add one below.' }));
-  } else {
-    for (const keyword of settings.userKeywords) {
-      chips.append(
-        el('span', { class: 'chip' }, [
-          keyword,
-          el('button', {
-            type: 'button',
-            text: '✕',
-            'aria-label': `Remove ${keyword}`,
-            onclick: () => patch({ userKeywords: settings.userKeywords.filter((k) => k !== keyword) }, status),
-          }),
-        ])
-      );
-    }
-  }
-
-  const input = el('input', { class: 'input', placeholder: 'e.g. instagram, tiktok', id: 'add-keyword' });
-  const submit = async () => {
-    const keyword = input.value.trim().toLowerCase().replace(/\s+/g, ' ');
-    if (keyword === '' || keyword.length > 80) {
-      statusLine(status, 'Enter a keyword between 1 and 80 characters.', true);
-      return;
-    }
-    if (settings.userKeywords.includes(keyword)) {
-      statusLine(status, 'That keyword is already blocked.');
-      return;
-    }
-    input.value = '';
-    await patch({ userKeywords: [...settings.userKeywords, keyword] }, status);
-  };
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') void submit();
-  });
-
-  const cardNode = card({
-    icon: '🔤',
-    title: 'Blocked keywords',
-    subtitle: 'Blocked on every website and search.',
-  });
-  cardNode.body.append(
-    chips,
-    el('div', { class: 'field-row popup-field' }, [
-      input,
-      el('button', { class: 'btn primary', type: 'button', text: 'Block', onclick: submit }),
-    ]),
-    status
-  );
-  return cardNode.card;
 }
 
 /** The shared blocklist: what is global, a refresh, and a submission box. */
@@ -345,32 +368,30 @@ function globalRulesCard(globalRules) {
   const status = el('div', { class: 'status-line' });
   const submitStatus = el('div', { class: 'status-line' });
 
-  const refreshButton = el('button', {
-    class: 'btn small',
-    type: 'button',
-    text: 'Check for updates',
-    onclick: async () => {
-      statusLine(status, 'Checking…');
-      try {
-        const result = await send('rules/sync', { force: true });
-        state = result.state;
-        render();
-      } catch (error) {
-        statusLine(status, errorMessage(error), true);
-      }
-    },
-  });
-
-  const cardNode = card({
+  const node = card({
     icon: '🌍',
     title: 'Shared blocklist',
     subtitle: globalRules.available
-      ? `${globalRules.keywordCount} keywords · ${globalRules.channelCount} channels blocked for everyone`
-      : 'No rules downloaded yet',
-    trailing: refreshButton,
+      ? `${globalRules.keywordCount} keywords · ${globalRules.channelCount} channels for everyone`
+      : 'Not downloaded yet',
+    trailing: el('button', {
+      class: 'btn small',
+      type: 'button',
+      text: 'Check for updates',
+      onclick: async () => {
+        statusLine(status, 'Checking…');
+        try {
+          const result = await send('rules/sync', { force: true });
+          state = result.state;
+          render();
+        } catch (error) {
+          statusLine(status, errorMessage(error), true);
+        }
+      },
+    }),
   });
 
-  cardNode.body.append(
+  node.body.append(
     el('div', {
       class: 'empty',
       text: globalRules.available
@@ -380,8 +401,6 @@ function globalRulesCard(globalRules) {
     status
   );
 
-  // Submission: a keyword the user wants blocked for everyone. Inert until an
-  // administrator approves it.
   const input = el('input', { class: 'input', placeholder: 'Suggest a keyword for everyone' });
   const submit = async () => {
     const keyword = input.value.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -392,7 +411,7 @@ function globalRulesCard(globalRules) {
     try {
       await send('submission/create', { kind: 'keyword', value: keyword });
       input.value = '';
-      statusLine(submitStatus, 'Sent for review. An administrator decides before it applies to anyone.');
+      statusLine(submitStatus, 'Sent for review. An administrator decides before it applies.');
     } catch (error) {
       statusLine(submitStatus, errorMessage(error), true);
     }
@@ -401,19 +420,53 @@ function globalRulesCard(globalRules) {
     if (event.key === 'Enter') void submit();
   });
 
-  cardNode.body.append(
+  node.body.append(
     el('div', { class: 'field-row popup-field' }, [
       input,
-      el('button', { class: 'btn', type: 'button', text: 'Ask to block', onclick: submit }),
+      el('button', { class: 'btn', type: 'button', text: 'Send', onclick: submit }),
     ]),
-    submitStatus,
-    el('div', { class: 'hint', text: 'Approved suggestions reach every participating install.' })
+    submitStatus
   );
 
-  return cardNode.card;
+  return node.card;
 }
 
-document.getElementById('open-options').addEventListener('click', () => chrome.runtime.openOptionsPage());
+function activityCard(stats) {
+  const total = stats.total ?? 0;
+  const node = card({
+    icon: '📊',
+    title: 'Recent activity',
+    subtitle: `${total} item${total === 1 ? '' : 's'} blocked on this device`,
+    trailing: el('button', {
+      class: 'btn small',
+      type: 'button',
+      text: 'Reset',
+      onclick: async () => {
+        try {
+          state = await send('stats/reset');
+          render();
+        } catch (error) {
+          toast(errorMessage(error));
+        }
+      },
+    }),
+  });
+  node.body.append(
+    el('div', {
+      class: 'empty',
+      text: stats.lastAt
+        ? `Last blocked ${relativeTime(stats.lastAt)}.`
+        : 'Nothing blocked yet. Protection is watching.',
+    })
+  );
+  return node.card;
+}
+
+// ── Footer ───────────────────────────────────────────────────────────────
+
+const openOptions = () => chrome.runtime.openOptionsPage();
+document.getElementById('open-options').addEventListener('click', openOptions);
+document.getElementById('open-options-footer').addEventListener('click', openOptions);
 document.getElementById('open-admin').addEventListener('click', () => {
   chrome.tabs.create({ url: chrome.runtime.getURL('src/admin/admin.html') });
 });
