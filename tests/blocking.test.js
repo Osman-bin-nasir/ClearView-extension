@@ -126,3 +126,116 @@ test('unrelated cards are never touched', () => {
   );
   assert.deepEqual(blocked, []);
 });
+
+// ── Blocked channels: the channel's own pages ────────────────────────────
+
+const UC = 'UCabcdefghijklmnopqrstuv';
+
+/** A state with a channel blocked by handle AND one blocked by id. */
+function channelState(overrides = {}) {
+  return state({
+    bundle: {
+      channels: ['@blockedchannel'],
+      channelIds: [UC],
+      ...overrides.bundle,
+    },
+    settings: overrides.settings,
+  });
+}
+
+test('a blocked channel’s page is blocked, in every URL shape it has', () => {
+  const s = channelState();
+  for (const url of [
+    'https://www.youtube.com/@BlockedChannel',
+    'https://www.youtube.com/@blockedchannel/videos',
+    'https://www.youtube.com/c/BlockedChannel',
+    'https://www.youtube.com/user/BlockedChannel',
+    'https://m.youtube.com/@BlockedChannel/streams',
+  ]) {
+    const decision = evaluateUrl(url, s);
+    assert.equal(decision.action, 'block', url);
+    assert.equal(decision.reason, 'channel', url);
+    assert.equal(decision.matchedItem, '@blockedchannel', url);
+  }
+});
+
+test('a channel blocked by its id is blocked too', () => {
+  const s = channelState();
+  const decision = evaluateUrl(`https://www.youtube.com/channel/${UC}/videos`, s);
+  assert.equal(decision.action, 'block');
+  assert.equal(decision.matchedItem, UC);
+});
+
+test('an unblocked channel page is left alone', () => {
+  const s = channelState();
+  assert.deepEqual(evaluateUrl('https://www.youtube.com/@someoneelse', s), { action: 'allow' });
+  assert.deepEqual(
+    evaluateUrl(`https://www.youtube.com/channel/UCzzzzzzzzzzzzzzzzzzzzzz`, s),
+    { action: 'allow' }
+  );
+});
+
+test('a VIDEO page is not blocked by the URL evaluator, by design', () => {
+  // A watch URL names no channel, so the worker cannot decide it — the content
+  // script reads the channel off the page and asks. Asserting the split here
+  // stops someone "fixing" this by guessing from the URL.
+  const s = channelState();
+  assert.deepEqual(evaluateUrl('https://www.youtube.com/watch?v=abc123', s), { action: 'allow' });
+});
+
+test('the channel check is inert when protection is off', () => {
+  const s = channelState({ settings: { protectionEnabled: false } });
+  assert.deepEqual(evaluateUrl('https://www.youtube.com/@BlockedChannel', s), { action: 'allow' });
+});
+
+// ── Blocked channels: the feeds ──────────────────────────────────────────
+
+test('a blocked channel is filtered even with Brain Bot switched off', () => {
+  // The Brain Bot toggle governs the KEYWORD filters. An explicit block is the
+  // user's own decision and must not be undone by a switch with another job.
+  const s = channelState({ settings: { brainBotEnabled: false } });
+  const blocked = evaluateFeedCards(
+    [
+      { title: 'a quiet documentary', channel: 'BlockedChannel' },
+      { title: 'a quiet documentary', channel: 'Someone Else' },
+    ],
+    s
+  );
+  assert.deepEqual(blocked.map((b) => b.index), [0]);
+  assert.equal(blocked[0].via, 'channel');
+});
+
+test('a blocked channel is matched through its LINK, not just its name', () => {
+  const s = channelState();
+  const blocked = evaluateFeedCards(
+    [
+      // A name that would collapse to a DIFFERENT handle, with the link that is
+      // the real identity. The link has to win.
+      { title: 'something', channel: 'Unrelated Name', channelUrl: '/@BlockedChannel' },
+      { title: 'something', channel: 'Unrelated Name', channelUrl: `/channel/${UC}` },
+    ],
+    s
+  );
+  assert.deepEqual(blocked.map((b) => b.index), [0, 1]);
+  assert.equal(blocked[1].matchedItem, UC);
+});
+
+test('an explicit channel block is not affected by the display mode', () => {
+  // It is reported as a channel match whatever the mode; the content script
+  // removes those cards rather than overlaying them.
+  for (const mode of ['remove', 'overlay']) {
+    const s = channelState({ settings: { brainBotMode: mode } });
+    const blocked = evaluateFeedCards([{ title: 'x', channel: 'BlockedChannel' }], s);
+    assert.equal(blocked[0].via, 'channel', mode);
+  }
+});
+
+test('no channel rules means feeds are judged by keywords alone', () => {
+  const s = state({ settings: { brainBotEnabled: false } });
+  assert.deepEqual(evaluateFeedCards([{ title: 'porn compilation', channel: 'x' }], s), []);
+});
+
+test('protection off filters nothing, however many channels are blocked', () => {
+  const s = channelState({ settings: { protectionEnabled: false } });
+  assert.deepEqual(evaluateFeedCards([{ title: 'x', channel: 'BlockedChannel' }], s), []);
+});

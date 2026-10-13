@@ -7,6 +7,7 @@
   "scripts": {
     "test": "node --test \"tests/**/*.test.js\"",
     "rules": "node scripts/extract-builtin-rules.mjs",
-    "icons": "node scripts/make-icons.mjs"
+    "icons": "node scripts/make-icons.mjs",
+    "config": "node scripts/make-config.mjs"
   }
 }

@@ -107,6 +107,24 @@ export const BRAIN_BOT_MODES = Object.freeze([
   },
 ]);
 
+/**
+ * The `source` values the backend's submission schema accepts.
+ *
+ * It is a closed enum server-side and the request body is `.strict()`, so an
+ * invented value is not quietly recorded as "unknown" — it is refused with
+ * `invalid_request`. The extension therefore sends one of these, and this list
+ * exists so the client and the server's schema cannot drift apart silently.
+ */
+export const SUBMISSION_SOURCES = Object.freeze(['youtube_not_interested', 'app', 'unknown']);
+
+/** What a suggestion is labelled when nothing more specific is true. */
+export const DEFAULT_SUBMISSION_SOURCE = 'unknown';
+
+/** Coerce anything to a source the backend will accept. */
+export function coerceSubmissionSource(value) {
+  return SUBMISSION_SOURCES.includes(value) ? value : DEFAULT_SUBMISSION_SOURCE;
+}
+
 /** The submission statuses the backend can return, plus the derived "removed". */
 export const SUBMISSION_STATUS = Object.freeze({
   pending: 'Pending',

@@ -18,15 +18,75 @@
 
 import { MatchType, checkString } from '../common/matching.js';
 import { SAFE_SEARCH_DESTINATION, isShortsUrl, parseSearchUrl } from '../common/search-engines.js';
+import { channelIdentity, matchBlockedChannel, parseChannelUrl } from '../common/channels.js';
 
 const BLOCKED_PAGE_PATH = 'src/blocked/blocked.html';
 
-/** DNR rule ids are positive integers; we own the low block for domain rules. */
-const DOMAIN_RULE_ID_BASE = 1;
+/**
+ * The blocked-channel rule lists, as Sets.
+ *
+ * Cached against the BUNDLE rather than rebuilt per call, because the feed
+ * evaluator runs on every DOM mutation of a YouTube page with up to 120 cards.
+ * A WeakMap keyed on the bundle is safe by construction: the bundle is replaced
+ * wholesale whenever settings or the shared list change, so a stale entry cannot
+ * outlive the rules it was built from.
+ */
+const channelSetCache = new WeakMap();
 
+function blockedChannelSets(bundle) {
+  let sets = channelSetCache.get(bundle);
+  if (!sets) {
+    sets = {
+      channels: new Set(bundle?.channels ?? []),
+      channelIds: new Set(bundle?.channelIds ?? []),
+    };
+    channelSetCache.set(bundle, sets);
+  }
+  return sets;
+}
+
+/**
+ * Does this channel identity match the blocked channels in force?
+ *
+ * Exported because the SAME question is asked from three places: a channel URL
+ * (here), a feed card (here), and the channel shown on a video page (the
+ * content script, which asks the worker). One implementation, so the three
+ * cannot disagree about what "this channel is blocked" means.
+ *
+ * @returns {string|null} the label that matched, for display
+ */
+export function isChannelBlocked(bundle, identity) {
+  if (!bundle) return null;
+  return matchBlockedChannel(blockedChannelSets(bundle), identity);
+}
+
+/** The extension's own blocked page, for a reason code. */
 function blockedPageUrl(reason) {
   return chrome.runtime.getURL(`${BLOCKED_PAGE_PATH}?reason=${encodeURIComponent(reason)}`);
 }
+
+/**
+ * Send a tab to the blocked page.
+ *
+ * A content script CANNOT do this itself: it cannot navigate a page to a
+ * `chrome-extension://` URL that is not a web-accessible resource, and making
+ * the blocked page web-accessible just to allow it would expose it to every site
+ * on the web. The redirect therefore lives in the worker, and a blocked channel
+ * reached from a video page lands on exactly the same page as a blocked website.
+ */
+export async function blockTab(tabId, reason = 'channel') {
+  if (typeof tabId !== 'number') return false;
+  try {
+    await chrome.tabs.update(tabId, { url: blockedPageUrl(reason) });
+    return true;
+  } catch (error) {
+    console.warn('[clearview] could not redirect the tab:', error?.message);
+    return false;
+  }
+}
+
+/** DNR rule ids are positive integers; we own the low block for domain rules. */
+const DOMAIN_RULE_ID_BASE = 1;
 
 /**
  * Decide what to do with a URL. Pure, so it can be unit-tested.
@@ -49,6 +109,19 @@ export function evaluateUrl(url, state) {
   //    around by pasting a URL.
   if (settings.blockShorts && isShortsUrl(url)) {
     return { action: 'block', matchedItem: 'YouTube Shorts', matchType: MatchType.BUILT_IN_KEYWORD, reason: 'shorts' };
+  }
+
+  // 0b. A YouTube CHANNEL page whose channel the user blocked. The identity is
+  //     in the URL here (`/@handle`, `/channel/UC…`), which is what makes this
+  //     checkable without loading anything. A video page carries no channel in
+  //     its URL, so that half is decided by the content script, which can read
+  //     the channel off the page.
+  const channel = parseChannelUrl(url);
+  if (channel) {
+    const matched = isChannelBlocked(bundle, channel);
+    if (matched) {
+      return { action: 'block', matchedItem: matched, matchType: MatchType.CHANNEL, reason: 'channel' };
+    }
   }
 
   // 1. Searching is checked BEFORE the URL, because a search-results URL
@@ -175,6 +248,8 @@ function reasonFor(matchType) {
       return 'your-keyword';
     case MatchType.GLOBAL_KEYWORD:
       return 'shared-keyword';
+    case MatchType.CHANNEL:
+      return 'channel';
     default:
       return 'blocked';
   }
@@ -196,17 +271,43 @@ function reasonFor(matchType) {
  * Runs here, in the worker, so a browser page never needs the rule set — the
  * content script sends titles and receives verdicts.
  *
- * @param {Array<{title?: string, channel?: string}>} cards
+ * The two halves answer to different switches, and that is deliberate. A
+ * channel the user blocked BY HAND is filtered whenever Protection is on: the
+ * Brain Bot toggle filters keyword matches, and letting it also decide whether an
+ * explicit block applies would mean a channel the user blocked kept appearing
+ * because a switch with a different job happened to be off. Everything else —
+ * titles, and suggestive channel NAMES from the built-in filters — is what the
+ * Brain Bot toggle is for.
+ *
+ * @param {Array<{title?: string, channel?: string, channelUrl?: string}>} cards
  * @returns {Array<{index: number, matchedItem: string, via: string}>}
  */
 export function evaluateFeedCards(cards, state) {
   const { settings, bundle } = state;
   const blocked = [];
-  if (!settings?.protectionEnabled || !settings?.brainBotEnabled || !bundle) return blocked;
+  if (!settings?.protectionEnabled || !bundle) return blocked;
 
-  const channelSet = new Set(bundle.channels);
+  const { channels: blockedChannels, channelIds } = blockedChannelSets(bundle);
+  const hasChannelRules = blockedChannels.size > 0 || channelIds.size > 0;
+  const filtersOn = Boolean(settings.brainBotEnabled);
 
   cards.forEach((card, index) => {
+    if (hasChannelRules) {
+      // The channel's own LINK is preferred over its printed name, because the
+      // link is YouTube's own claim about which channel this is.
+      const identity = channelIdentity({
+        url: typeof card?.channelUrl === 'string' ? card.channelUrl : null,
+        name: typeof card?.channel === 'string' ? card.channel : null,
+      });
+      const matched = matchBlockedChannel({ channels: blockedChannels, channelIds }, identity);
+      if (matched) {
+        blocked.push({ index, matchedItem: matched, via: 'channel' });
+        return;
+      }
+    }
+
+    if (!filtersOn) return;
+
     const title = (card?.title ?? '').trim();
     if (title !== '') {
       const verdict = checkString(title, {
@@ -222,12 +323,6 @@ export function evaluateFeedCards(cards, state) {
 
     const channel = (card?.channel ?? '').trim();
     if (channel === '') return;
-
-    const handle = '@' + channel.toLowerCase().replace(/^@+/, '').replace(/\s+/g, '');
-    if (channelSet.has(handle)) {
-      blocked.push({ index, matchedItem: handle, via: 'channel' });
-      return;
-    }
 
     const channelVerdict = checkString(channel, { isUrl: false, builtIn: bundle.builtIn, userKeywords: [] });
     if (channelVerdict.blocked) {

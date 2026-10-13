@@ -10,19 +10,12 @@
  */
 
 import { activeBuiltInKeywords, allBlockedDomains } from './matching.js';
+import { normalizeBlockedChannels, normalizeHandle } from './channels.js';
 
-/**
- * Normalize a channel handle the way the backend does: one leading "@",
- * lower-cased, and null for anything not a plausible handle. Mirrored here so
- * the extension and the server agree on what a given input means.
- */
-export function normalizeHandle(input) {
-  const withoutAt = String(input).trim().replace(/^@+/, '').trim();
-  if (withoutAt === '') return null;
-  const body = withoutAt.toLowerCase();
-  if (!/^[a-z0-9._-]{2,100}$/.test(body)) return null;
-  return `@${body}`;
-}
+// Channel identity lives in `channels.js` so the block-list matching and the
+// URL parsing that feeds it sit together. Re-exported here because this is the
+// module the UI and the tests already import a handle normalizer from.
+export { normalizeHandle };
 
 /** Case-folded, de-duplicated keyword list, preserving first-seen order. */
 export function normalizeKeywords(list) {
@@ -42,7 +35,7 @@ export function normalizeKeywords(list) {
  *
  * @param {object} settings     the merged settings object
  * @param {object|null} global  the cached global rules `{ keywords, channels }`
- * @returns {{ builtIn: string[], domains: string[], everywhere: string[], youtube: string[], channels: string[] }}
+ * @returns {{ builtIn: string[], domains: string[], everywhere: string[], youtube: string[], channels: string[], channelIds: string[] }}
  */
 export function buildRuleBundle(settings, global) {
   const globalKeywords = (global?.keywords ?? []).map((k) => k.keyword);
@@ -64,12 +57,21 @@ export function buildRuleBundle(settings, global) {
   // that already applies everywhere.
   const youtube = normalizeKeywords([...(settings.youtubeKeywords ?? []), ...everywhere]);
 
+  // A blocked channel is stored by handle AND, when the page offered one, by
+  // channel id. Both are carried: a handle can be changed by the channel and an
+  // id cannot, so a block made from a `/channel/UC…` URL would be lost the day
+  // the channel renamed itself if only the id were kept, and the reverse holds
+  // for a block made from `/@handle` before the id was ever seen.
+  const blocked = normalizeBlockedChannels(settings.blockedChannels ?? []);
+
   const channels = [
     ...new Set([
-      ...(settings.blockedChannels ?? []).map((c) => normalizeHandle(c.handle)).filter(Boolean),
+      ...blocked.map((c) => c.handle).filter(Boolean),
       ...globalChannels.map((h) => normalizeHandle(h)).filter(Boolean),
     ]),
   ];
 
-  return { builtIn, domains, everywhere, youtube, channels };
+  const channelIds = [...new Set(blocked.map((c) => c.channelId).filter(Boolean))];
+
+  return { builtIn, domains, everywhere, youtube, channels, channelIds };
 }

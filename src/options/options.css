@@ -43,6 +43,38 @@
   color: var(--muted);
 }
 
+/* A blocked channel needs two lines of its own (a name the user recognises and
+   the handle/id behind it), so it cannot be the single-line chip row the other
+   lists use. */
+.channel-row {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.channel-row .channel-main {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.channel-row .channel-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-row .btn-row {
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: center;
+}
+
+.channel-row .status-line {
+  margin-top: 4px;
+}
+
 .submissions-table td,
 .submissions-table th {
   font-size: 12px;

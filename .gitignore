@@ -11,3 +11,6 @@ Thumbs.db
 *.pem
 .env
 .env.*
+# ...except the template, which is meant to be committed: it is the only place
+# the available settings are documented.
+!.env.example

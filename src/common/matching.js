@@ -32,6 +32,7 @@ export const MatchType = Object.freeze({
   BUILT_IN_KEYWORD: 'BUILT_IN_KEYWORD',
   USER_KEYWORD: 'USER_KEYWORD',
   GLOBAL_KEYWORD: 'GLOBAL_KEYWORD',
+  CHANNEL: 'CHANNEL',
   INCognito: 'INCOGNITO',
 });
 

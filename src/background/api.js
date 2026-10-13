@@ -14,7 +14,7 @@
  * snapshot in force (see rules-sync.js) rather than empty the blocklist.
  */
 
-import { ADMIN, BRAINROT, DEFAULT_API_BASE } from '../common/constants.js';
+import { ADMIN, BRAINROT, coerceSubmissionSource, DEFAULT_API_BASE } from '../common/constants.js';
 import { getAnonymousId } from '../common/settings.js';
 
 /** An error carrying the backend's machine-readable `error` code. */
@@ -92,11 +92,14 @@ export async function fetchRules(base) {
 }
 
 /** Suggest a keyword for the global repository. Inert until an admin approves. */
-export async function submitSuggestion(base, { kind, value, note = null, source = 'extension', displayName = null }) {
+export async function submitSuggestion(base, { kind, value, note = null, source = null, displayName = null }) {
   const anonymousId = await getAnonymousId();
   return request(base, BRAINROT.suggestions, {
     method: 'POST',
-    body: { kind, value, note, source, displayName, anonymousId },
+    // `source` is coerced rather than passed through: the backend's schema is a
+    // closed enum with a strict body, so any other value is a 400 rather than a
+    // mislabelled record.
+    body: { kind, value, note, source: coerceSubmissionSource(source), displayName, anonymousId },
   });
 }
 

@@ -14,7 +14,8 @@
     "storage",
     "webNavigation",
     "declarativeNetRequest",
-    "alarms"
+    "alarms",
+    "contextMenus"
   ],
   "host_permissions": [
     "https://clearview-1neb.onrender.com/*"

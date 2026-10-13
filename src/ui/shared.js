@@ -115,6 +115,8 @@ export function errorMessage(error) {
       return 'That input was not accepted. Check it and try again.';
     case 'invalid_keyword':
       return 'Enter a keyword between 1 and 80 characters.';
+    case 'invalid_channel':
+      return 'ClearView could not tell which channel that was. Open the video and use the ⋮ menu instead.';
     case 'invalid_channel_handle':
       return 'Enter a channel handle like @examplechannel.';
     case 'rate_limited':

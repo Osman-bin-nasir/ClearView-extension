@@ -9,7 +9,7 @@
  * any page a content script could reach.
  */
 
-import { BRAINROT, STORAGE } from '../common/constants.js';
+import { BRAINROT, STORAGE, coerceSubmissionSource } from '../common/constants.js';
 import {
   bumpStats,
   getAnonymousId,
@@ -20,6 +20,13 @@ import {
   updateSettings,
 } from '../common/settings.js';
 import {
+  addBlockedChannel,
+  channelIdentity,
+  channelRecord,
+  normalizeBlockedChannels,
+  removeBlockedChannel,
+} from '../common/channels.js';
+import {
   ApiError,
   adminLogin,
   adminLogout,
@@ -29,9 +36,16 @@ import {
   reportTarget,
   submitSuggestion,
 } from './api.js';
-import { evaluateFeedCards, installDomainRules, initBlocker } from './blocking.js';
+import { blockTab, evaluateFeedCards, installDomainRules, initBlocker, isChannelBlocked } from './blocking.js';
 import { syncGlobalRules } from './rules-sync.js';
 import { ensureState, refreshState } from './state.js';
+import {
+  CONTEXT_MENU_ID,
+  CONTEXT_TARGET_MESSAGE,
+  installContextMenus,
+  resolveContextTarget,
+  unresolvableMessage,
+} from './context-menus.js';
 
 const RULES_ALARM = 'clearview.rules-refresh';
 
@@ -81,6 +95,136 @@ initBlocker({
   },
 });
 
+// ── Blocking a channel ───────────────────────────────────────────────────
+//
+// One function, because a channel gets blocked from four places — the video's
+// ⋮ menu, the right-click menu, the options page, and the popup — and they must
+// all end up with the same record, the same de-duplication, and the same
+// immediate re-application of the rules.
+
+/**
+ * Add a channel to the block list.
+ *
+ * Returns the new state, or throws with a code the caller can word. The record
+ * is built by `channelRecord`, so a caller that supplies nothing usable gets a
+ * refusal rather than an empty entry that shows in the UI as a blank row.
+ */
+async function blockChannel({ handle = null, channelId = null, name = null, source = 'manual' } = {}) {
+  const record = channelRecord({ handle, channelId, name, source });
+  if (!record) throw new ApiError('invalid_channel', 400, 'That is not a channel ClearView can block.');
+
+  const settings = (await ensureState()).settings;
+  await updateSettings({ blockedChannels: addBlockedChannel(settings.blockedChannels, record) });
+  await applyState();
+  return describeState();
+}
+
+// ── The right-click menu ─────────────────────────────────────────────────
+//
+// Registered at the TOP LEVEL, like the navigation listener above, and for the
+// same reason: MV3 stops an idle worker, and an event that arrives while it is
+// stopped only reaches a listener registered during the worker's first
+// synchronous run.
+
+installContextMenus();
+
+/** Ask a tab's content script which card was last right-clicked. */
+async function askPageForChannel(tabId) {
+  if (typeof tabId !== 'number' || !chrome.tabs?.sendMessage) return null;
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, { type: CONTEXT_TARGET_MESSAGE });
+    return response ?? null;
+  } catch {
+    // No content script in that tab (a non-YouTube page, a PDF, a page loaded
+    // before the extension was installed). Nothing to say about it.
+    return null;
+  }
+}
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== CONTEXT_MENU_ID) return;
+  void (async () => {
+    const { identity, reason } = await resolveContextTarget(info, tab, askPageForChannel);
+    if (!identity) {
+      console.warn('[clearview] block channel: nothing to block —', reason);
+      await report(tab?.id, unresolvableMessage(reason), { failure: true });
+      return;
+    }
+    try {
+      const state = await blockChannel({
+        handle: identity.handle,
+        channelId: identity.channelId,
+        name: identity.name,
+        source: 'context-menu',
+      });
+      await report(tab?.id, describeBlock(identity, state));
+    } catch (error) {
+      console.warn('[clearview] block channel failed:', error?.code ?? error?.message);
+      await report(tab?.id, error?.message ?? 'Could not block that channel.', { failure: true });
+    }
+  })();
+});
+
+/**
+ * Tell the page what just happened.
+ *
+ * The content script draws a toast; a context menu has no UI of its own, and a
+ * silent block leaves the user unable to tell whether it worked.
+ *
+ * @returns {Promise<boolean>} whether the page could be told
+ */
+async function notifyUser(tabId, text) {
+  if (typeof tabId !== 'number') return false;
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'channel/blockResult', text });
+    return true;
+  } catch {
+    // No content script listening, which happens whenever the tab was loaded
+    // before the extension was (re)loaded. The caller decides what to do.
+    return false;
+  }
+}
+
+/**
+ * Report a FAILURE where the page cannot hear it.
+ *
+ * If a tab has no live content script, `notifyUser` fails too, and a right-click
+ * that did nothing would produce no feedback anywhere — which is exactly the
+ * experience this exists to prevent. The toolbar badge always exists, so it is
+ * the backstop: an exclamation mark and the reason in the tooltip, cleared
+ * shortly afterwards.
+ *
+ * Failures only. A SUCCESSFUL block is reported by the page's toast, and a badge
+ * for it would be noise.
+ */
+async function flagFailure(message) {
+  try {
+    await chrome.action.setBadgeBackgroundColor({ color: '#b3261e' });
+    await chrome.action.setBadgeText({ text: '!' });
+    await chrome.action.setTitle({ title: `ClearView — ${message}` });
+    setTimeout(() => {
+      void chrome.action.setBadgeText({ text: '' });
+      void chrome.action.setTitle({ title: 'ClearView' });
+    }, 8000);
+  } catch {
+    // Nothing further to try; the console warning above is the record.
+  }
+}
+
+/** Tell the page, and fall back to the badge when it cannot be told. */
+async function report(tabId, text, { failure = false } = {}) {
+  const told = await notifyUser(tabId, text);
+  if (!told && failure) await flagFailure(text);
+  return told;
+}
+
+/** "Blocked @handle" — the label the user will see in settings. */
+function describeBlock(identity, state) {
+  const label = identity.handle ?? identity.channelId ?? 'that channel';
+  const total = state.bundleCounts.channels + state.bundleCounts.channelIds;
+  return `Blocked ${label}. ${total} channel${total === 1 ? '' : 's'} blocked in ClearView.`;
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(RULES_ALARM, { periodInMinutes: 180 });
   void bootstrap();
@@ -119,7 +263,11 @@ async function describeState() {
       everywhere: state.bundle.everywhere.length,
       youtube: state.bundle.youtube.length,
       channels: state.bundle.channels.length,
+      channelIds: state.bundle.channelIds.length,
     },
+    // The block list as the UI shows it: normalized, de-duplicated, and with
+    // the display names and origins the raw setting does not carry.
+    blockedChannels: normalizeBlockedChannels(state.settings.blockedChannels),
     global: global
       ? {
           available: true,
@@ -167,7 +315,10 @@ async function rulesForContent() {
     // against the always-on filter AND the user's YouTube keywords.
     keywords: bundle.youtube,
     builtIn: bundle.builtIn,
-    channels: bundle.channels,
+    // A COUNT, not the list. The content script needs to know whether there is
+    // anything to filter a channel against — it does not need to know which
+    // channels, because the matching stays in the worker.
+    blockedChannelCount: bundle.channels.length + bundle.channelIds.length,
   };
 }
 
@@ -257,8 +408,85 @@ const handlers = {
       value: message.value,
       note: message.note ?? null,
       displayName: message.displayName ?? null,
-      source: 'extension',
+      // Coerced to the backend's closed enum: the previous hard-coded
+      // 'extension' is not one of its values, so every suggestion built that way
+      // was refused with `invalid_request` before it was ever recorded.
+      source: coerceSubmissionSource(message.source),
     });
+  },
+
+  /**
+   * Block a channel.
+   *
+   * The content script and the UI both land here, so a channel blocked from the
+   * ⋮ menu and one blocked in settings are indistinguishable afterwards.
+   */
+  'channel/block': async (message) => {
+    // The callers that see a channel first (the ⋮ menu, the right-click menu)
+    // have an HREF, not a handle, so the identity is derived here — by the same
+    // parser the matcher uses.
+    const fromUrl = channelIdentity({ url: message.url ?? null });
+
+    // A display NAME is deliberately not turned into a handle here. Matching may
+    // fall back to a name; a BLOCK may not, because a handle invented from a
+    // name would be written to storage and would then block a channel the user
+    // never chose — or nothing at all, silently. Nothing usable means a refusal.
+    return blockChannel({
+      handle: message.handle ?? fromUrl?.handle ?? null,
+      channelId: message.channelId ?? fromUrl?.channelId ?? null,
+      name: message.name ?? fromUrl?.name ?? null,
+      source: message.source ?? 'manual',
+    });
+  },
+
+  /**
+   * Is this channel blocked? Answers WITHOUT acting.
+   *
+   * The ⋮ menu needs the answer to label itself — "Block" or "Unblock" — and
+   * asking is what keeps the channel list itself out of the page.
+   */
+  'channel/status': async (message) => {
+    const state = await ensureState();
+    if (!state.settings?.protectionEnabled) return { blocked: false, matchedItem: null };
+    const identity = channelIdentity({
+      url: message.url ?? null,
+      name: message.name ?? null,
+      channelId: message.channelId ?? null,
+    });
+    const matched = isChannelBlocked(state.bundle, identity);
+    return { blocked: Boolean(matched), matchedItem: matched ?? null };
+  },
+
+  'channel/unblock': async (message) => {
+    const settings = (await ensureState()).settings;
+    await updateSettings({ blockedChannels: removeBlockedChannel(settings.blockedChannels, message.label) });
+    await applyState();
+    return describeState();
+  },
+
+  /**
+   * Is the channel on THIS page blocked?
+   *
+   * Asked by the content script, which is the only thing that can read the
+   * channel off a video page. The redirect happens here rather than there: a
+   * page cannot navigate itself to a `chrome-extension://` URL, and keeping it
+   * here means a blocked channel lands on the same blocked page a blocked
+   * website does, with the same reason-code discipline.
+   */
+  'channel/check': async (message, sender) => {
+    const state = await ensureState();
+    if (!state.settings?.protectionEnabled) return { blocked: false, matchedItem: null };
+
+    const identity = channelIdentity({
+      url: message.url ?? null,
+      name: message.name ?? null,
+      channelId: message.channelId ?? null,
+    });
+    const matched = isChannelBlocked(state.bundle, identity);
+    if (!matched) return { blocked: false, matchedItem: null };
+
+    const applied = await blockTab(sender?.tab?.id, 'channel');
+    return { blocked: true, matchedItem: matched, applied };
   },
 
   'submissions/list': async () => {
@@ -316,10 +544,12 @@ const handlers = {
   'admin/request': async (message) => adminCall(message.path, { method: message.method, body: message.body }),
 };
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handler = handlers[message?.type];
   if (!handler) return false;
-  handler(message)
+  // `sender` is passed through because a handler that acts on the TAB (the
+  // video-page channel check) has no other way to know which tab asked.
+  handler(message, sender)
     .then((data) => sendResponse({ ok: true, data }))
     .catch((error) => {
       sendResponse({

@@ -115,6 +115,8 @@ function render() {
     }).card
   );
 
+  content.append(blockedChannelsCard(protectionOn));
+
   // ── My blocked items ───────────────────────────────────────────────────
   content.append(section('My blocked items'));
 
@@ -165,6 +167,61 @@ function render() {
     resetStatus
   );
   content.append(activity.card);
+}
+
+/**
+ * The blocked channels, with a one-tap unblock.
+ *
+ * Read-only apart from removal on purpose: the popup is a switchboard, and the
+ * decisions that need explaining — asking an administrator to block a channel
+ * for everyone — live in the full settings page.
+ */
+function blockedChannelsCard(protectionOn) {
+  const channels = state.blockedChannels ?? [];
+  const status = el('div', { class: 'status-line' });
+  const chips = el('div', { class: 'chip-list' });
+
+  if (channels.length === 0) {
+    chips.append(el('div', { class: 'empty', text: 'No channels blocked yet.' }));
+  } else {
+    for (const channel of channels) {
+      const label = channel.handle ?? channel.channelId;
+      chips.append(
+        el('span', { class: 'chip' }, [
+          channel.name ? `${channel.name} · ${label}` : label,
+          el('button', {
+            type: 'button',
+            text: '✕',
+            'aria-label': `Unblock ${label}`,
+            disabled: protectionOn ? false : true,
+            onclick: async () => {
+              try {
+                state = await send('channel/unblock', { label });
+                render();
+              } catch (error) {
+                statusLine(status, errorMessage(error), true);
+              }
+            },
+          }),
+        ])
+      );
+    }
+  }
+
+  const node = card({
+    icon: '📺',
+    title: 'Blocked channels',
+    subtitle:
+      channels.length === 0
+        ? 'None blocked yet.'
+        : `${channels.length} blocked — hidden from feeds, and their pages will not open.`,
+    detail: [
+      'Block a channel from any video’s ⋮ menu, or by right-clicking a thumbnail.',
+      'Full settings is where you can ask an administrator to block one for everyone.',
+    ],
+  });
+  node.body.append(chips, status);
+  return node.card;
 }
 
 /** The user's blocked hostnames, with an inline add field. */

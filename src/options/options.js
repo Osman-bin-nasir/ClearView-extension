@@ -12,6 +12,7 @@
 import { BRAIN_BOT_MODES, SUBMISSION_STATUS } from '../common/constants.js';
 import { normalizeDomain } from '../common/matching.js';
 import { normalizeHandle } from '../common/rules-bundle.js';
+import { BLOCK_SOURCES } from '../common/channels.js';
 import {
   card,
   clear,
@@ -106,28 +107,7 @@ function render() {
       onRemove: (item) => patch({ youtubeKeywords: settings.youtubeKeywords.filter((k) => k !== item) }),
     })
   );
-  content.append(
-    managerCard({
-      icon: '📺',
-      title: 'Blocked channels',
-      subtitle: 'Channels are stored by their @handle, so a rename never loses the block.',
-      placeholder: '@channelhandle',
-      items: settings.blockedChannels.map((c) => c.handle),
-      disabled: !protectionOn,
-      emptyText: 'No channels blocked yet.',
-      onAdd: async (value) => {
-        const handle = normalizeHandle(value);
-        if (!handle) {
-          notify('Enter a channel handle like @examplechannel.');
-          return false;
-        }
-        return patch({
-          blockedChannels: [...settings.blockedChannels.filter((c) => c.handle !== handle), { handle, name: null }],
-        });
-      },
-      onRemove: (item) => patch({ blockedChannels: settings.blockedChannels.filter((c) => c.handle !== item) }),
-    })
-  );
+  content.append(blockedChannelsCard(protectionOn));
 
   // ── My blocked items ───────────────────────────────────────────────────
   content.append(section('My blocked items'));
@@ -264,7 +244,161 @@ function shortsCard(protectionOn) {
   }).card;
 }
 
-/** A list with add/remove, used for keywords, domains and channels. */
+/**
+ * The blocked channels, and the two things that can be done with each.
+ *
+ * A card of its own rather than the generic chip list, because a channel is not
+ * a string: it carries the display name the user recognises, the @handle that
+ * is its stored identity, the channel id when the page offered one, where the
+ * block came from, and — the part the shared repository needs — whether it can
+ * be submitted at all.
+ */
+function blockedChannelsCard(protectionOn) {
+  const status = el('div', { class: 'status-line' });
+  const node = card({
+    icon: '📺',
+    title: 'Blocked channels',
+    subtitle: 'Their videos leave your YouTube feeds, and their channel page and videos will not open.',
+    detail: [
+      'Add one from a video: open its ⋮ menu and choose “Block this channel”, or right-click a thumbnail.',
+      'Channels are stored by their @handle, so a channel rename never loses the block. The channel id is kept too, when the page offered one.',
+      'Asking to block a channel for everyone sends a request for review — it never changes what anyone else blocks on its own.',
+    ],
+  });
+
+  const channels = state.blockedChannels ?? [];
+  const list = el('div', { class: 'list' });
+  if (channels.length === 0) {
+    list.append(el('div', { class: 'empty', text: 'No channels blocked yet. Use the ⋮ menu on any YouTube video.' }));
+  } else {
+    for (const channel of channels) list.append(blockedChannelRow(channel, protectionOn));
+  }
+
+  const input = el('input', { class: 'input', placeholder: '@channelhandle', disabled: protectionOn ? false : true });
+  const add = async () => {
+    const handle = normalizeHandle(input.value);
+    if (!handle) {
+      statusLine(status, 'Enter a channel handle like @examplechannel.', true);
+      return;
+    }
+    if (channels.some((c) => c.handle === handle)) {
+      statusLine(status, 'That channel is already blocked.');
+      return;
+    }
+    try {
+      state = await send('channel/block', { handle, source: 'manual' });
+      input.value = '';
+      render();
+    } catch (error) {
+      statusLine(status, errorMessage(error), true);
+    }
+  };
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') void add();
+  });
+
+  node.body.append(
+    list,
+    el('div', { class: 'field-row', style: 'margin-top:10px' }, [
+      input,
+      el('button', {
+        class: 'btn primary',
+        type: 'button',
+        text: 'Add',
+        disabled: protectionOn ? false : true,
+        onclick: add,
+      }),
+    ]),
+    status
+  );
+  return node.card;
+}
+
+/** One blocked channel: what it is, where the block came from, and what to do. */
+function blockedChannelRow(channel, protectionOn) {
+  const rowStatus = el('div', { class: 'status-line' });
+  const label = channel.handle ?? channel.channelId;
+
+  const meta = [];
+  if (channel.handle && channel.name) meta.push(channel.handle);
+  if (channel.channelId) meta.push(channel.channelId);
+  if (channel.addedAt) meta.push(relativeTime(channel.addedAt));
+  meta.push(BLOCK_SOURCES[channel.source] ?? 'Blocked');
+
+  const submitted = (submissions ?? []).some(
+    (entry) => entry.kind === 'channel' && String(entry.value).toLowerCase() === String(label).toLowerCase()
+  );
+
+  const requestButton = el('button', {
+    class: 'btn small',
+    type: 'button',
+    text: submitted ? 'Requested' : 'Ask to block for everyone',
+    disabled: submitted || !channel.handle || !protectionOn,
+    // The server stores a global channel rule as a HANDLE and refuses anything
+    // else, so a channel known only by its opaque id has to be added by handle
+    // first. Saying so beats a request that would be rejected with a puzzling
+    // error nobody could act on.
+    title: channel.handle
+      ? 'Send this channel for administrator review'
+      : 'Global requests use the channel’s @handle. Add it below if you know it.',
+    onclick: () => void submitChannel(channel, rowStatus, requestButton),
+  });
+
+  return el('div', { class: 'list-row channel-row' }, [
+    el('div', { class: 'channel-main' }, [
+      el('div', { class: 'channel-name', text: channel.name ?? label }),
+      el('div', { class: 'meta', text: meta.join(' · ') }),
+      rowStatus,
+    ]),
+    el('div', { class: 'btn-row' }, [
+      requestButton,
+      el('button', {
+        class: 'btn small',
+        type: 'button',
+        text: 'Remove',
+        'aria-label': `Unblock ${label}`,
+        onclick: async () => {
+          try {
+            state = await send('channel/unblock', { label });
+            render();
+            notify(`Unblocked ${label}.`);
+          } catch (error) {
+            statusLine(rowStatus, errorMessage(error), true);
+          }
+        },
+      }),
+    ]),
+  ]);
+}
+
+/** Ask an administrator to block this channel for everyone. Inert until reviewed. */
+async function submitChannel(channel, rowStatus, button) {
+  if (!channel.handle) {
+    statusLine(rowStatus, 'A global request needs the channel’s @handle.', true);
+    return;
+  }
+  statusLine(rowStatus, 'Sending…');
+  try {
+    await send('submission/create', {
+      kind: 'channel',
+      value: channel.handle,
+      displayName: channel.name ?? null,
+      source: 'unknown',
+    });
+    statusLine(rowStatus, 'Sent for review. An administrator decides before it applies to anyone.');
+    // Updated in place rather than by re-rendering: a full re-render would
+    // replace this row and take the sentence above with it.
+    if (button) {
+      button.textContent = 'Requested';
+      button.disabled = true;
+    }
+    await loadSubmissions(false);
+  } catch (error) {
+    statusLine(rowStatus, errorMessage(error), true);
+  }
+}
+
+/** A list with add/remove, used for keywords and domains. */
 function managerCard({ icon, title, subtitle, placeholder, items, onAdd, onRemove, disabled, emptyText }) {
   const status = el('div', { class: 'status-line' });
   const node = card({ icon, title, subtitle });
@@ -665,4 +799,7 @@ document.getElementById('open-admin').addEventListener('click', () => {
 void (async () => {
   await refresh();
   await loadSubmissions(false);
+  // Rendered once more AFTER the submissions land, so a channel already sent for
+  // review says "Requested" on first paint rather than looking un-asked-for.
+  render();
 })();

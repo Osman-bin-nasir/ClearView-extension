@@ -32,6 +32,10 @@ const COPY = {
     title: 'Shorts are blocked',
     message: 'YouTube Shorts are switched off, so ClearView stopped this one from loading.',
   },
+  channel: {
+    title: 'Channel blocked',
+    message: 'You blocked this YouTube channel, so ClearView stopped its page from loading. You can unblock it from Blocked channels in settings.',
+  },
 };
 
 const reason = new URLSearchParams(location.search).get('reason') ?? 'keyword';

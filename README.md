@@ -10,6 +10,10 @@ workflow.
   matching engine** as the Android app.
 - Hides the **YouTube Shorts** entry point **and** blocks Shorts links, matching
   the app's `blockShorts` control.
+- **Block a YouTube channel** from a video's ⋮ menu or by right-clicking a
+  thumbnail. Its videos leave your feeds, and its channel page and videos will
+  not open. Manage them in settings — remove one, or ask for a **global block**,
+  with no account and no sign-in.
 - **Brain Bot protection** on YouTube feeds, with a choice of *remove* or
   *overlay*.
 - **Community keyword submissions** through the existing backend review queue,
@@ -48,7 +52,7 @@ Open **Full settings** (or `chrome://extensions` → *Extension options*).
 | **Brain Bot Protection** | Filters YouTube feed cards. Choose *Remove from feed* or *Show protection overlay*. |
 | **Blocked websites / keywords** | Your own rules. Keywords apply to every site and search. |
 | **Brain Bot keywords** | Keywords matched against YouTube titles only. |
-| **Blocked channels** | Stored by `@handle`, so a channel rename never loses the block. |
+| **Blocked channels** | Channels you blocked, with *Remove* and *Ask to block for everyone* on each. Stored by `@handle`, so a channel rename never loses the block. |
 | **Backend server** | Defaults to the deployed ClearView server. Change for self-hosting. |
 | **Anonymous identity** | The random install id your contributions are sent with. |
 
@@ -127,6 +131,44 @@ the worker's — and keeps a page from holding the rule set.
   re-applied on `yt-navigate-finish` and on DOM mutations (debounced), and every
   card is marked once handled — an overlay can never be stacked twice.
 
+### Blocking a channel
+
+Two ways in, both from where the user already is:
+
+- **A video's own ⋮ menu.** A *Block this channel* entry is added to the watch
+  page's overflow menu. When the channel is already blocked the entry reads
+  *Unblock this channel* instead, so it can never be a button that does nothing
+the user expects.
+- **Right-click.** *Block this channel (ClearView)* appears on a thumbnail, the
+  player, or a channel name.
+
+**What a block does** (Feeds + the channel's own pages):
+
+| Surface | How it is decided |
+| --- | --- |
+| YouTube feeds | The card's channel **link** (`/@handle` or `/channel/UC…`) is matched, not its printed name. Filtered whenever Protection is on — the Brain Bot toggle governs the *keyword* filters, and an explicit block is not its business. |
+| The channel's page and its tabs (`/videos`, `/shorts`, …) | The identity is in the URL, so the worker's navigation evaluator blocks it — `/@handle`, `/channel/UC…`, `/c/Name` and `/user/Name` all resolve to the same channel. |
+| A video page | A watch URL names **no channel**, so the content script reads the owner link off the page and asks the worker (`channel/check`). The redirect is the worker's, because a page cannot navigate itself to a `chrome-extension://` URL — which is also why the blocked page is *not* made web-accessible. |
+
+An explicitly blocked channel is **removed** from feeds whatever the Brain Bot
+display mode is: the mode chooses how a keyword match is presented, and has no
+business leaving behind a channel the user asked to be rid of.
+
+### Channel identity, and what is never guessed
+
+A channel is identified by three things YouTube will name it by — `/@handle`,
+`/channel/UC…`, and the legacy `/c/` and `/user/` forms — all parsed in
+`src/common/channels.js`. Both the **handle** and the **channel id** are stored
+when both are known: a handle can be renamed away and an id cannot, and the
+reverse holds for a block made before the id was ever seen.
+
+Matching may fall back to a channel's **display name**, because a feed card is
+sometimes all there is. **Storing a block may not.** A handle invented from a
+display name — `"Some Channel • Music"` → `@somechannelmusic` — would be written
+to storage and would then block a channel the user never chose, or nothing at
+all, silently. So a block with nothing but a name is *refused* with a message
+pointing at the ⋮ menu, rather than accepted.
+
 ---
 
 ## 5. Community keywords and the shared blocklist
@@ -146,6 +188,17 @@ second system.
   nothing about the user. The client-supplied id is **not** treated as proof of
   anything: the server validates the shape, rate-limits the surface, and
   de-duplicates per device. Spam prevention is server-side.
+- **No account, and no sign-in.** A blocked channel can be sent for global
+  review without any account, exactly as the Android app does it. There is no
+  Google/Firebase sign-in in the extension.
+- **`source` is a closed enum.** The server accepts `youtube_not_interested`,
+  `app` or `unknown` and its body schema is `.strict()`, so any other value is
+  refused outright — not recorded as "unknown". The client coerces to that list
+  (`SUBMISSION_SOURCES` in `src/common/constants.js`) rather than passing a
+  value of its own invention.
+- **A global channel request needs a `@handle`.** The server stores a channel
+  rule as a handle and refuses anything else, so a channel known only by its
+  opaque id shows *Remove* but not *Ask to block for everyone*.
 - **Nothing unpublished applies to anyone.** A submission is inert until an
   administrator approves it; approval writes the rule and marks the submission in
   one backend transaction.
@@ -181,15 +234,43 @@ The password is exchanged for a short-lived (10-minute) bearer token, which the
 **service worker** holds and refreshes; the page never sees a credential it could
 leak, and **no admin secret is bundled in the extension**.
 
+**The administrator's email lives in `.env`**, and is used for exactly one thing:
+pre-filling the sign-in form.
+
+```bash
+cp .env.example .env      # set ADMIN_EMAIL=you@example.com
+npm run config            # bakes .env into src/common/env.config.js
+```
+
+The extension has no runtime environment — nothing inside one can read `.env` —
+so `npm run config` writes those values into a module it imports. The defaults
+are committed, so **the extension loads and works without ever running it**.
+
+What is *not* in that value is any authority. It grants nothing: the backend
+re-reads the administrator's row and its permissions on every request, so typing
+a different address changes no permission, and a fabricated request from the
+console is refused by the API. There is deliberately no password, token or
+service-account key in `.env.example`, and none belongs there — a credential
+shipped inside an extension is a credential published to everyone who installs
+it. For the same reason there is **no Google/Firebase sign-in**: the app's
+Firebase *Auth* project would require an OAuth client for this extension and
+would add an identity the backend's anonymous submission surface does not ask
+for.
+
 ### Creating the first administrator
 
-Use the backend's own tooling (in the ClearView repository):
+The administrator is a **backend** concept, not an extension one — it lives in
+the backend's own `.env` and database, in the ClearView repository:
 
 ```bash
 cd server
 npm run create-admin       # or: npx tsx src/create-admin.ts
 npx tsx scripts/check-super-admin.ts   # verify the account and its role
 ```
+
+The account needs the `brainrot.read` / `brainrot.manage` permissions to see the
+review queue; those are held by `super_admin` only, and they are what the
+dashboard's tabs are gated on — server-side, per request.
 
 ---
 
@@ -226,6 +307,7 @@ current design avoids needing that at all.
 | `webNavigation` | To see a navigation's URL and redirect it before the page loads. |
 | `declarativeNetRequest` | Dynamic host-blocking rules. |
 | `alarms` | Periodic shared-blocklist refresh. |
+| `contextMenus` | The right-click *Block this channel* entry. |
 | `host_permissions: https://clearview-1neb.onrender.com/*` | Reaching the API from the worker. |
 | `optional_host_permissions: https://*/*` | Requested only if you point the extension at your own server. |
 
@@ -239,7 +321,7 @@ Content scripts are limited to `*://*.youtube.com/*`.
 npm test        # node --test "tests/**/*.test.js"
 ```
 
-48 tests, covering:
+108 tests, covering:
 
 - **`tests/matching.test.js`** — normalization (fullwidth, leetspeak, separator
   and spaced forms), whole-word boundaries, domain matching, the three tiers, and
@@ -250,7 +332,20 @@ npm test        # node --test "tests/**/*.test.js"
 - **`tests/rules.test.js`** — the generated lists are populated, no comment text
   leaked, and community rules **add** to the built-in ones.
 - **`tests/blocking.test.js`** — the navigation evaluator and Brain Bot feed
-  evaluation against stubs, including "protection off blocks nothing".
+  evaluation against stubs, including "protection off blocks nothing" and the
+  blocked-channel rules (a channel page in every URL shape it has, a feed card
+  matched through its link, and that a **video** URL is deliberately *not*
+  decided from the URL alone).
+- **`tests/channels.test.js`** — channel identity: URL shapes, relative hrefs,
+  handle/id normalization, block-list de-duplication, add/remove, and matching by
+  handle, by id and by display name.
+- **`tests/channel-menu.test.js`** — resolving a right-click (including the
+  refusal to block a channel for a link that is not on YouTube), the submission
+  **source enum**, and static guards on the ⋮-menu injection (scoped to the watch
+  page's own menu, plain DOM rather than YouTube's managed elements, injected
+  once).
+- **`tests/config.test.js`** — the `.env` → `env.config.js` generator, run for
+  real and imported, plus the check that no credential is ever added to it.
 - **`tests/integration.test.js`** — the **real** ported rule set end-to-end
   (adult hosts, keyword-in-URL, explicit vs. normal searches, Strict Mode,
   community rules), plus a live check of the deployed backend's `/rules`
@@ -266,6 +361,10 @@ npm test        # node --test "tests/**/*.test.js"
 | Shorts entry point hidden **and** Shorts links blocked | Toggle on, reload YouTube, open a `/shorts/…` link. |
 | Brain Bot remove / overlay | Toggle each mode on a home feed. |
 | Dynamic navigation | Scroll the feed; overlays must not duplicate. |
+| **Block a channel from ⋮** | Open a video, use the ⋮ menu → *Block this channel*; the entry then reads *Unblock this channel*. |
+| **Block a channel by right-click** | Right-click a thumbnail → *Block this channel (ClearView)*. |
+| **A blocked channel is gone** | Its cards leave home/search/subscriptions, `/@handle` and `/channel/UC…` show the blocked page, and its video pages redirect there. |
+| **Right-click off-target is refused** | Right-click a link in a video description → a message, and no block. |
 | Settings persist | Restart Chrome. |
 | Approved keywords distributed | Approve a submission in the dashboard, then *Check for updates*. |
 
@@ -280,12 +379,15 @@ src/
     matching.js               Ported KeywordMatcher: normalization + tiers
     rules/                    GENERATED built-in rules (from BlockRepository.kt)
     rules-bundle.js           Effective rules = built-in + user + community
+    channels.js               Channel identity: URL parsing + block-list matching
     search-engines.js         Search-URL parsing + safe destination
-    constants.js              Storage keys, defaults, endpoints
+    constants.js              Storage keys, defaults, endpoints, source enum
     settings.js               chrome.storage access
+    env.config.js             GENERATED from .env by `npm run config`
   background/                 Service worker
     service-worker.js         Boot, message router, admin session
     blocking.js               DNR host rules + navigation evaluator
+    context-menus.js          The right-click "Block this channel" entry
     rules-sync.js             Versioned/TTL shared-blocklist cache
     api.js                    Backend client (public + admin)
     state.js                  Live settings + rule bundle
@@ -298,6 +400,7 @@ src/
 scripts/
   extract-builtin-rules.mjs   Regenerate rules from the Android app
   make-icons.mjs              Generate the PNG icons (no dependencies)
+  make-config.mjs             Turn .env into src/common/env.config.js
 tests/                        node --test suite
 ```
 
@@ -317,6 +420,19 @@ tests/                        node --test suite
 
 ## 11. Known limitations
 
+- **The ⋮ menu entry is injected, not sanctioned by YouTube.** It is added to the
+  watch page's own overflow menu by the content script, scoped to
+  `ytd-watch-metadata` so it cannot land in another menu, and built from plain DOM
+  rather than YouTube's Polymer-managed menu elements (which would upgrade and
+  could discard it). YouTube can still change that markup; if the entry stops
+  appearing, the right-click menu and the settings page are unaffected. No
+  in-browser automation is available here, so this is the part most worth
+  checking by hand — see the manual checklist in §8.
+- **A blocked channel's video pages redirect away.** That is the requested
+  behaviour ("feeds + the channel's own pages"), but be aware it acts on the
+  *video* too, not only the channel page: a video URL names no channel, so the
+  content script reads the owner off the page and the worker redirects. Turning
+  Protection off stops it immediately.
 - **Shorts** hides the entry point *and* blocks Shorts URLs, at the request of
   the product owner and matching the Android app. The original brief asked for
   hide-only; the toggle's URL block is the single check in `evaluateUrl` and can

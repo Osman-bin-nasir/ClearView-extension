@@ -15,7 +15,15 @@
  */
 
 import { ADMIN, SUBMISSION_STATUS } from '../common/constants.js';
+import { ADMIN_EMAIL } from '../common/env.config.js';
 import { card, clear, el, errorMessage, pill, relativeTime, send, statusLine } from '../ui/shared.js';
+
+// The administrator's address from `.env`, pre-filled so signing in is one field
+// to type rather than two. It is a convenience, NOT a check: permissions come
+// from the backend, which re-reads the account on every request, so this value
+// grants nothing and a different one would be treated exactly the same.
+const emailField = document.getElementById('email');
+if (ADMIN_EMAIL) emailField.value = ADMIN_EMAIL;
 
 const gate = document.getElementById('gate');
 const dashboard = document.getElementById('dashboard');

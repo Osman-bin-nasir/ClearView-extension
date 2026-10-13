@@ -68,3 +68,90 @@ html.cv-hide-shorts yt-chip-cloud-chip-renderer:has([title="Shorts"]) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ── The "Block this channel" entry in YouTube's ⋮ menu ────────────────── */
+/*
+ * Hand-styled rather than built from YouTube's own menu component on purpose.
+ * Creating a `ytd-menu-service-item-renderer` would hand the node to YouTube's
+ * Polymer, which upgrades, re-renders and can discard it — a menu entry that
+ * disappears when the framework takes over is worse than one that only looks
+ * slightly different. The metrics below are YouTube's own menu geometry, so the
+ * difference is not visible in practice.
+ */
+
+.cv-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 16px;
+  border: 0;
+  background: transparent;
+  color: var(--yt-spec-text-primary, #f1f1f1);
+  font-family: Roboto, Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cv-menu-item:hover,
+.cv-menu-item:focus-visible {
+  background: var(--yt-spec-10-percent-layer, rgba(255, 255, 255, 0.1));
+  outline: none;
+}
+
+.cv-menu-item__icon {
+  display: inline-flex;
+  flex: 0 0 24px;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  color: var(--yt-spec-icon-inactive, #909090);
+}
+
+.cv-menu-item:hover .cv-menu-item__icon {
+  color: var(--yt-spec-text-primary, #f1f1f1);
+}
+
+.cv-menu-item__label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Toast ─────────────────────────────────────────────────────────────── */
+/*
+ * The ⋮ menu closes the moment it is used and a context-menu click has no UI at
+ * all, so this is the only confirmation the user gets that the block happened.
+ */
+
+.cv-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 2147483000;
+  transform: translate(-50%, 12px);
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: rgba(0, 32, 28, 0.96);
+  border: 1px solid rgba(99, 218, 203, 0.55);
+  color: #e7f5f2;
+  font-family: Roboto, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.cv-toast--visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
