@@ -17,7 +17,7 @@
  */
 
 import { MatchType, checkString } from '../common/matching.js';
-import { SAFE_SEARCH_DESTINATION, parseSearchUrl } from '../common/search-engines.js';
+import { SAFE_SEARCH_DESTINATION, isShortsUrl, parseSearchUrl } from '../common/search-engines.js';
 
 const BLOCKED_PAGE_PATH = 'src/blocked/blocked.html';
 
@@ -41,6 +41,15 @@ export function evaluateUrl(url, state) {
   if (!bundle) return { action: 'allow' };
 
   const { builtIn, domains, everywhere } = bundle;
+
+  // 0. Block Shorts when the Shorts control is on — the same behaviour as the
+  //    Android app's `blockShorts`, which blocks any YouTube /shorts URL. The
+  //    content script separately hides the entry point; this is what stops a
+  //    Short being reached by its own link, so the toggle cannot be walked
+  //    around by pasting a URL.
+  if (settings.blockShorts && isShortsUrl(url)) {
+    return { action: 'block', matchedItem: 'YouTube Shorts', matchType: MatchType.BUILT_IN_KEYWORD, reason: 'shorts' };
+  }
 
   // 1. Searching is checked BEFORE the URL, because a search-results URL
   //    contains the query: without this order, a blocked search would be
@@ -138,7 +147,7 @@ export async function handleNavigation(details, state) {
 
   const target = decision.action === 'search'
     ? SAFE_SEARCH_DESTINATION
-    : blockedPageUrl(decision.action === 'block' ? reasonFor(decision.matchType) : 'search');
+    : blockedPageUrl(decision.reason ?? reasonFor(decision.matchType));
 
   const previous = lastRedirect.get(details.tabId);
   if (previous && previous.target === target && Date.now() - previous.at < 1000) {
@@ -243,7 +252,10 @@ export function initBlocker({ getState, onBlocked }) {
   if (blockerInstalled) return;
   blockerInstalled = true;
   chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
-    const state = getState();
+    // Loaded here rather than before registration: a just-woken worker has no
+    // state yet, and skipping the event because state was not ready would drop
+    // exactly the navigation that woke it.
+    const state = await getState();
     if (!state?.ready) return;
     const outcome = await handleNavigation(details, state);
     if (outcome.action !== 'allow' && outcome.applied) {

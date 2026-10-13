@@ -252,14 +252,14 @@ function shortsCard(protectionOn) {
   return card({
     icon: '▶️',
     title: 'Block YouTube Shorts',
-    subtitle: 'Hides the Shorts entry point in YouTube navigation.',
+    subtitle: 'Hides the Shorts entry point and blocks Shorts links.',
     trailing: switchControl(state.settings.blockShorts, (value) => patch({ blockShorts: value }), {
       disabled: !protectionOn,
     }),
     detail: [
       'Removes the Shorts link from the YouTube guide and chip bar.',
-      'Direct Shorts links still open and play — this hides the entry point, it does not block the format.',
-      'Regular YouTube browsing is unaffected.',
+      'Opening a Shorts link directly is blocked too, so the toggle cannot be walked around by pasting a URL.',
+      'Regular YouTube watch pages, search and subscriptions are unaffected.',
     ],
   }).card;
 }

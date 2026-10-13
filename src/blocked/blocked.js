@@ -28,6 +28,10 @@ const COPY = {
     title: 'Search blocked',
     message: 'That search matched the content filters, so ClearView redirected you somewhere safe.',
   },
+  shorts: {
+    title: 'Shorts are blocked',
+    message: 'YouTube Shorts are switched off, so ClearView stopped this one from loading.',
+  },
 };
 
 const reason = new URLSearchParams(location.search).get('reason') ?? 'keyword';

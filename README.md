@@ -8,7 +8,8 @@ workflow.
 
 - Blocks explicit websites and searches using the **same rules and the same
   matching engine** as the Android app.
-- Hides the **YouTube Shorts** entry point without blocking Shorts URLs.
+- Hides the **YouTube Shorts** entry point **and** blocks Shorts links, matching
+  the app's `blockShorts` control.
 - **Brain Bot protection** on YouTube feeds, with a choice of *remove* or
   *overlay*.
 - **Community keyword submissions** through the existing backend review queue,
@@ -43,7 +44,7 @@ Open **Full settings** (or `chrome://extensions` → *Extension options*).
 | --- | --- |
 | **Protection** | Master switch. Off means nothing is blocked at all. |
 | **Strict Mode** | Adds the app's discovery terms (bikini, lingerie, …). |
-| **Block YouTube Shorts** | Hides the Shorts entry point. Direct Shorts links still play. |
+| **Block YouTube Shorts** | Hides the Shorts entry point and blocks Shorts links (app parity). |
 | **Brain Bot Protection** | Filters YouTube feed cards. Choose *Remove from feed* or *Show protection overlay*. |
 | **Blocked websites / keywords** | Your own rules. Keywords apply to every site and search. |
 | **Brain Bot keywords** | Keywords matched against YouTube titles only. |
@@ -114,8 +115,13 @@ matching: it reads what is on screen (card titles and channel names) and asks th
 service worker which cards to act on. That keeps one matcher in the codebase —
 the worker's — and keeps a page from holding the rule set.
 
-- **Shorts:** toggling the control adds a class to `<html>` that a stylesheet
-  acts on. Nothing intercepts navigation, so Shorts URLs still open and play.
+- **Shorts:** two halves, deliberately split. The content script HIDES the entry
+  points — it identifies them by *shape* (a link to `/shorts`) rather than by
+  label, because YouTube relabels and re-renders far more often than it changes
+  where a Shorts link points, and it re-applies on every DOM mutation so a guide
+  rendered after load is still caught. The **worker** blocks a Shorts URL when the
+  control is on (the `blockShorts` check in `evaluateUrl`), which is what stops a
+  Short being reached by pasting its link.
 - **Brain Bot:** cards are either removed (`display: none`) or covered in place
   by an overlay, per the chosen mode. YouTube is a single-page app, so changes are
   re-applied on `yt-navigate-finish` and on DOM mutations (debounced), and every
@@ -257,7 +263,7 @@ npm test        # node --test "tests/**/*.test.js"
 | Explicit website blocked | Visit a blocked host → the ClearView blocked page. |
 | Explicit search redirected, no query carried | Search an explicit term → lands on Google with no query in the URL. |
 | Normal searches unaffected | Search anything ordinary. |
-| Shorts entry point hidden; direct Shorts play | Toggle on, reload YouTube, open a `/shorts/…` link. |
+| Shorts entry point hidden **and** Shorts links blocked | Toggle on, reload YouTube, open a `/shorts/…` link. |
 | Brain Bot remove / overlay | Toggle each mode on a home feed. |
 | Dynamic navigation | Scroll the feed; overlays must not duplicate. |
 | Settings persist | Restart Chrome. |
@@ -311,8 +317,10 @@ tests/                        node --test suite
 
 ## 11. Known limitations
 
-- **Shorts** hides the entry point (as specified) and does not block playback;
-  Shorts URLs remain functional by design.
+- **Shorts** hides the entry point *and* blocks Shorts URLs, at the request of
+  the product owner and matching the Android app. The original brief asked for
+  hide-only; the toggle's URL block is the single check in `evaluateUrl` and can
+  be removed there to return to hide-only behaviour.
 - The ported matcher covers URL, search-query and YouTube-feed surfaces. Android
   accessibility-only behaviours (incognito-browsing blocking, in-app WebView
   interception, device-admin and DNS controls) have no browser equivalent and are

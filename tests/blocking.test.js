@@ -69,6 +69,29 @@ test('an ordinary page is allowed', () => {
   assert.deepEqual(evaluateUrl('https://example.com/news', s), { action: 'allow' });
 });
 
+// ── Shorts blocking (app parity: `blockShorts`) ──────────────────────────
+
+test('a Shorts URL is blocked only while the Shorts control is on', () => {
+  const off = state();
+  assert.equal(evaluateUrl('https://www.youtube.com/shorts/abc123', off).action, 'allow');
+
+  const on = state({ settings: { blockShorts: true } });
+  const decision = evaluateUrl('https://www.youtube.com/shorts/abc123', on);
+  assert.equal(decision.action, 'block');
+  assert.equal(decision.reason, 'shorts');
+});
+
+test('the Shorts control never blocks ordinary YouTube', () => {
+  const s = state({ settings: { blockShorts: true } });
+  assert.deepEqual(evaluateUrl('https://www.youtube.com/watch?v=abc', s), { action: 'allow' });
+  assert.deepEqual(evaluateUrl('https://www.youtube.com/', s), { action: 'allow' });
+});
+
+test('the Shorts control is inert when protection is off', () => {
+  const s = state({ settings: { blockShorts: true, protectionEnabled: false } });
+  assert.equal(evaluateUrl('https://www.youtube.com/shorts/abc', s).action, 'allow');
+});
+
 // ── Brain Bot feed evaluation ────────────────────────────────────────────
 
 test('feed cards match on title and on channel', () => {

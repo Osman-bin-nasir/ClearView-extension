@@ -54,6 +54,14 @@ test('Strict Mode adds blocking the default set does not', () => {
   assert.equal(evaluateUrl(target, strictState).action, 'search');
 });
 
+test('the Shorts control blocks a Shorts URL but leaves YouTube working', () => {
+  const shortsState = { settings: { ...settings, blockShorts: true }, bundle: state.bundle };
+  assert.equal(evaluateUrl('https://www.youtube.com/shorts/abc123', shortsState).action, 'block');
+  assert.equal(evaluateUrl('https://m.youtube.com/shorts/abc123', shortsState).action, 'block');
+  assert.equal(evaluateUrl('https://www.youtube.com/watch?v=abc', shortsState).action, 'allow');
+  assert.equal(evaluateUrl('https://www.youtube.com/feed/subscriptions', shortsState).action, 'allow');
+});
+
 test('a community rule is enforced once it is in the bundle', () => {
   const withCommunity = {
     settings,

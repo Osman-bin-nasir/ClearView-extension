@@ -11,13 +11,21 @@
  */
 
 /* ── Shorts entry points ───────────────────────────────────────────────── */
-
-html.cv-hide-shorts ytd-guide-entry-renderer:has(a[href="/shorts"]),
-html.cv-hide-shorts ytd-guide-entry-renderer:has(a[title="Shorts"]),
+/*
+ * `[href^="/shorts"]` rather than `[href="/shorts"]`: YouTube writes the link as
+ * "/shorts/" (with a trailing slash), so an exact-match selector silently
+ * matched nothing and the icon stayed visible. Matching the PREFIX covers
+ * "/shorts", "/shorts/" and "/shorts/<id>", and survives a relabel.
+ */
+html.cv-hide-shorts ytd-guide-entry-renderer:has(a[href^="/shorts"]),
+html.cv-hide-shorts ytd-guide-entry-renderer:has([title="Shorts"]),
+html.cv-hide-shorts ytd-guide-entry-renderer:has([aria-label="Shorts"]),
+html.cv-hide-shorts ytd-guide-entry-renderer[is-shorts],
+html.cv-hide-shorts ytd-mini-guide-entry-renderer:has(a[href^="/shorts"]),
+html.cv-hide-shorts ytd-mini-guide-entry-renderer:has([title="Shorts"]),
 html.cv-hide-shorts ytd-mini-guide-entry-renderer[aria-label="Shorts"],
-html.cv-hide-shorts ytd-mini-guide-entry-renderer:has(a[href="/shorts"]),
-html.cv-hide-shorts ytd-feed-filter-chip-bar-renderer yt-chip-cloud-chip-renderer:has([title="Shorts"]),
-html.cv-hide-shorts yt-chip-cloud-chip-renderer:has(a[href*="/shorts"]) {
+html.cv-hide-shorts yt-chip-cloud-chip-renderer:has(a[href^="/shorts"]),
+html.cv-hide-shorts yt-chip-cloud-chip-renderer:has([title="Shorts"]) {
   display: none !important;
 }
 

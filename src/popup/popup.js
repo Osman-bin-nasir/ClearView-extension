@@ -108,7 +108,7 @@ function render() {
     card({
       icon: '▶️',
       title: 'Block YouTube Shorts',
-      subtitle: 'Hides the Shorts entry point. Direct Shorts links still play.',
+      subtitle: 'Hides the Shorts entry point and blocks Shorts links.',
       trailing: switchControl(settings.blockShorts, (value) => patch({ blockShorts: value }), {
         disabled: !protectionOn,
       }),

@@ -3,9 +3,11 @@
  *
  * Two jobs, both purely visual, and the split between them is deliberate:
  *
- *  - **Hide the Shorts entry points.** Hiding must never block Shorts URLs or
- *    stop a Short playing when the user gets to one directly, so this only
- *    toggles a class on <html> that a stylesheet acts on. Nothing is intercepted.
+ *  - **Hide the Shorts entry points.** This script only HIDES: it toggles a
+ *    class on <html> and hides the matching guide/chip entries, and it
+ *    intercepts no navigation. Blocking a Shorts URL outright is the background
+ *    worker's job (the `blockShorts` check in evaluateUrl), which keeps the two
+ *    concerns — what the page shows, and what may be loaded — separate.
  *  - **Brain Bot feed protection.** Matching feed cards are either removed or
  *    covered in place, according to the user's chosen mode.
  *
@@ -76,9 +78,68 @@
 
   // ── Shorts entry points ────────────────────────────────────────────────
 
+  /**
+   * The containers a Shorts entry can live in.
+   *
+   * YouTube renames the label and reshuffles these elements' attributes far more
+   * often than it changes where a Shorts link POINTS, so an entry is identified
+   * by shape (a link to /shorts) rather than by its text. The CSS file carries
+   * the same rules for an instant hide on load; this JS pass is what copes with
+   * the guide being re-rendered later, which is when a pure-CSS fix silently
+   * stops working.
+   */
+  const SHORTS_CONTAINER_SELECTOR = [
+    'ytd-guide-entry-renderer',
+    'ytd-mini-guide-entry-renderer',
+    'yt-chip-cloud-chip-renderer',
+  ].join(',');
+
+  /** Shorts entries this script has hidden, with the display value to restore. */
+  const hiddenShorts = new Map();
+
+  function isShortsEntry(element) {
+    if (element.hasAttribute('is-shorts')) return true;
+    if (element.querySelector('a[href^="/shorts"]')) return true;
+    const label = `${element.getAttribute('title') ?? ''} ${element.getAttribute('aria-label') ?? ''}`
+      .trim()
+      .toLowerCase();
+    if (label === 'shorts') return true;
+    return Boolean(element.querySelector('[title="Shorts"], [aria-label="Shorts"]'));
+  }
+
+  function restoreShortsEntries() {
+    for (const [element, previousDisplay] of hiddenShorts) {
+      element.style.display = previousDisplay;
+    }
+    hiddenShorts.clear();
+  }
+
+  /**
+   * Hide (or restore) the Shorts entry points.
+   *
+   * Runs on every mutation as well as on navigation, so an entry rendered later
+   * is caught. Hiding never touches a /shorts URL — reaching a Short directly
+   * still works — the URL-level block, when enabled, is the background worker's.
+   */
   function applyShorts() {
     const hide = Boolean(config.enabled && config.blockShorts);
     document.documentElement.classList.toggle(HIDE_CLASS, hide);
+
+    if (!hide) {
+      restoreShortsEntries();
+      return;
+    }
+
+    for (const element of document.querySelectorAll(SHORTS_CONTAINER_SELECTOR)) {
+      if (hiddenShorts.has(element) || !isShortsEntry(element)) continue;
+      hiddenShorts.set(element, element.style.display);
+      element.style.display = 'none';
+    }
+    // Drop entries YouTube has since removed, so the map cannot grow unbounded
+    // during a long session of guide re-renders.
+    for (const element of [...hiddenShorts.keys()]) {
+      if (!element.isConnected) hiddenShorts.delete(element);
+    }
   }
 
   // ── Feed cards ─────────────────────────────────────────────────────────
@@ -192,6 +253,9 @@
     if (scanTimer !== null) return;
     scanTimer = window.setTimeout(() => {
       scanTimer = null;
+      // The entry points and the feed are both re-rendered as the user browses,
+      // so one debounced pass keeps both correct.
+      applyShorts();
       void scan();
     }, 200);
   }

@@ -47,29 +47,39 @@ let bootstrapped = false;
 async function bootstrap() {
   if (bootstrapped) return;
   bootstrapped = true;
-  const state = await refreshState();
-  initBlocker({
-    getState: () => stateSnapshot,
-    onBlocked: (outcome, url) => {
-      bumpStats(outcome.action === 'search' ? 'search' : (outcome.matchType ?? 'blocked'), url).catch(() => {});
-    },
-  });
-  stateSnapshot = state;
-  await installDomainRules(state.bundle.domains);
+  await applyState();
   // Best-effort: a cold, offline start keeps working on the cached rules.
   void syncGlobalRules({ force: false }).then(async (result) => {
     if (result.changed) await applyState();
   });
 }
 
-/** The state handed to the blocker, kept in sync with storage. */
-let stateSnapshot = { ready: false };
-
+/** Refresh our view of the world and (re-)install the host rules. */
 async function applyState() {
-  stateSnapshot = await refreshState();
-  await installDomainRules(stateSnapshot.bundle?.domains ?? []);
-  return stateSnapshot;
+  const state = await refreshState();
+  await installDomainRules(state.bundle?.domains ?? []);
+  return state;
 }
+
+// ── Blocking listener ────────────────────────────────────────────────────
+//
+// Registered here, at the TOP LEVEL and synchronously — not inside the async
+// bootstrap above.
+//
+// MV3 stops an idle service worker, and delivers an event that arrives while it
+// is stopped to whatever listeners were registered during the worker's FIRST
+// synchronous run. A listener added after an `await` may not be registered yet
+// when Chrome dispatches the event, and the event is then dropped. Registering
+// this inside bootstrap() meant the worker was woken for a navigation, found no
+// listener, and blocked nothing — websites, searches and Shorts alike. The state
+// the handler needs is loaded lazily, inside the handler, so registration never
+// depends on any async work having finished.
+initBlocker({
+  getState: () => ensureState(),
+  onBlocked: (outcome, url) => {
+    bumpStats(outcome.action === 'search' ? 'search' : (outcome.matchType ?? 'blocked'), url).catch(() => {});
+  },
+});
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(RULES_ALARM, { periodInMinutes: 180 });
