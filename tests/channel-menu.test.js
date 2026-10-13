@@ -46,12 +46,12 @@ const UC = 'UCabcdefghijklmnopqrstuv';
 
 test('a right-clicked channel link resolves without asking the page', async () => {
   const p = page();
-  const { identity, reason } = await resolveContextTarget(
+  const { target, reason } = await resolveContextTarget(
     { linkUrl: 'https://www.youtube.com/@SomeHandle' },
     { id: 7 },
     p.ask
   );
-  assert.deepEqual(identity, { handle: '@somehandle', channelId: null, name: null });
+  assert.deepEqual(target, { url: 'https://www.youtube.com/@SomeHandle', name: null, channelId: null });
   assert.equal(reason, 'channel-link');
   assert.deepEqual(p.calls, [], 'the URL already answered it');
 });
@@ -59,63 +59,84 @@ test('a right-clicked channel link resolves without asking the page', async () =
 test('a right-clicked video link is resolved from the page, never from the URL', async () => {
   // A watch URL carries no channel, so the only honest source is the page.
   const p = page({ url: '/@FromTheCard', name: 'From The Card' });
-  const { identity, reason } = await resolveContextTarget(
+  const { target, reason } = await resolveContextTarget(
     { linkUrl: 'https://www.youtube.com/watch?v=abc123' },
     { id: 7 },
     p.ask
   );
   assert.equal(reason, 'page');
-  assert.equal(identity.handle, '@fromthecard');
+  assert.equal(target.url, '/@FromTheCard');
+  assert.equal(target.name, 'From The Card');
   assert.deepEqual(p.calls, [7]);
+});
+
+test('a card whose channel has NO link resolves by its printed name alone', async () => {
+  // YouTube's current grid: the channel is an attributed string carrying a click
+  // command and no href. The target then has a name and no URL — and the name is
+  // handed on as a NAME, never turned into a handle here.
+  const p = page({ url: null, name: 'The Japanese Town' });
+  const { target, reason } = await resolveContextTarget(
+    { linkUrl: 'https://www.youtube.com/watch?v=abc123' },
+    { id: 7 },
+    p.ask
+  );
+  // `page-name`, not `page`: the card gave no link, so the target rests on the
+  // printed name alone. The reasons are the diagnostic trail for "the menu did
+  // nothing" reports, so a name-only resolution has to be distinguishable from a
+  // card that carried a link.
+  assert.equal(reason, 'page-name');
+  assert.equal(target.url, null);
+  assert.equal(target.name, 'The Japanese Town');
+  assert.equal(target.handle, undefined, 'no handle may be invented from a name');
 });
 
 test('right-clicking the thumbnail artwork uses the page too', async () => {
   const p = page({ url: `/channel/${UC}`, name: 'Some Channel' });
-  const { identity } = await resolveContextTarget({ linkUrl: '' }, { id: 3 }, p.ask);
-  assert.equal(identity.channelId, UC);
+  const { target } = await resolveContextTarget({ linkUrl: '' }, { id: 3 }, p.ask);
+  assert.equal(target.url, `/channel/${UC}`);
 });
 
 test('a link that is not on YouTube is refused outright', async () => {
   // Blocking here would block whatever channel the page happens to be showing,
   // which is not what the user right-clicked.
   const p = page({ url: '/@SomeHandle', name: 'Some Handle' });
-  const { identity, reason } = await resolveContextTarget(
+  const { target, reason } = await resolveContextTarget(
     { linkUrl: 'https://example.com/some-article' },
     { id: 7 },
     p.ask
   );
-  assert.equal(identity, null);
+  assert.equal(target, null);
   assert.equal(reason, 'not-a-youtube-link');
   assert.deepEqual(p.calls, [], 'the page must not be consulted for a foreign link');
 });
 
 test('a video whose channel could not be read is reported, not guessed', async () => {
   const p = page(null);
-  const { identity, reason } = await resolveContextTarget(
+  const { target, reason } = await resolveContextTarget(
     { linkUrl: 'https://www.youtube.com/watch?v=abc123' },
     { id: 7 },
     p.ask
   );
-  assert.equal(identity, null);
+  assert.equal(target, null);
   assert.equal(reason, 'video-without-channel');
 });
 
 test('a right-click with nothing under it reports that, distinctly', async () => {
   const p = page(null);
-  const { identity, reason } = await resolveContextTarget({}, { id: 7 }, p.ask);
-  assert.equal(identity, null);
+  const { target, reason } = await resolveContextTarget({}, { id: 7 }, p.ask);
+  assert.equal(target, null);
   assert.equal(reason, 'no-target');
 });
 
 test('a tab that cannot be asked yields no block rather than an exception', async () => {
   // `chrome.tabs.sendMessage` rejects on a page with no content script; the
   // worker's wrapper turns that into null.
-  const { identity, reason } = await resolveContextTarget(
+  const { target, reason } = await resolveContextTarget(
     { linkUrl: 'https://www.youtube.com/watch?v=abc123' },
     {},
     async () => null
   );
-  assert.equal(identity, null);
+  assert.equal(target, null);
   assert.equal(reason, 'video-without-channel');
 });
 
@@ -125,7 +146,7 @@ test('when the page cannot answer, a CHANNEL page URL still resolves', async () 
   // bar already names it. Without this, a tab running a stale content script
   // makes "Block" do nothing at all.
   const p = page(null);
-  const { identity, reason } = await resolveContextTarget(
+  const { target, reason } = await resolveContextTarget(
     {
       linkUrl: 'https://www.youtube.com/watch?v=abc',
       pageUrl: 'https://www.youtube.com/@SomeHandle/videos',
@@ -133,13 +154,13 @@ test('when the page cannot answer, a CHANNEL page URL still resolves', async () 
     { id: 7 },
     p.ask
   );
-  assert.equal(identity.handle, '@somehandle');
+  assert.equal(target.url, 'https://www.youtube.com/@SomeHandle/videos');
   assert.equal(reason, 'page-url');
 });
 
 test('the clicked card wins over the page URL', async () => {
   const p = page({ url: '/@FromTheCard', name: 'From The Card' });
-  const { identity, reason } = await resolveContextTarget(
+  const { target, reason } = await resolveContextTarget(
     {
       linkUrl: 'https://www.youtube.com/watch?v=abc',
       pageUrl: 'https://www.youtube.com/@PageChannel',
@@ -147,18 +168,18 @@ test('the clicked card wins over the page URL', async () => {
     { id: 7 },
     p.ask
   );
-  assert.equal(identity.handle, '@fromthecard');
+  assert.equal(target.url, '/@FromTheCard');
   assert.equal(reason, 'page');
 });
 
 test('a VIDEO page URL is not a channel, so the refusal still stands', async () => {
   const p = page(null);
-  const { identity, reason } = await resolveContextTarget(
+  const { target, reason } = await resolveContextTarget(
     { linkUrl: 'https://www.youtube.com/watch?v=abc', pageUrl: 'https://www.youtube.com/watch?v=abc' },
     { id: 7 },
     p.ask
   );
-  assert.equal(identity, null);
+  assert.equal(target, null);
   assert.equal(reason, 'video-without-channel');
 });
 
@@ -169,6 +190,42 @@ test('each unresolvable reason gets its own sentence', () => {
   assert.match(notYoutube, /thumbnail|channel/i);
   assert.match(noChannel, /channel/i);
   assert.equal(unresolvableMessage('anything-else'), unresolvableMessage(undefined));
+});
+
+// ── The card's own ⋮ menu ────────────────────────────────────────────────
+
+test('a CARD’s ⋮ menu gets the entry too, in BOTH menu shapes YouTube serves', () => {
+  // The three-dot button on a card is the only menu the card has, and until this
+  // existed the only way to block its channel was to open the video and use the
+  // player's menu.
+  assert.ok(script.includes('CARD_MENU_TRIGGER_SELECTOR'), 'the card’s own trigger must be recognised');
+  assert.ok(
+    /aria-label="More actions"/.test(script),
+    'the current grid’s trigger label is the one read off a live card'
+  );
+  assert.ok(
+    script.includes('yt-list-view-model[role="menu"]'),
+    'the current grid opens a context SHEET — one of the two live shapes'
+  );
+  assert.ok(
+    /dropdown\.querySelector\('ytd-menu-popup-renderer'\)/.test(script),
+    'a SEARCH result card opens the classic menu; matching only the sheet left those untouched'
+  );
+  assert.ok(script.includes('scheduleMenuInjection(card)'), 'the card is recorded by the click that opened its menu');
+  assert.ok(script.includes('blockCardChannel'), 'the card’s entry blocks the card’s channel');
+  assert.ok(
+    /container\.prepend\(buildMenuItem\(menuCard \? CARD_MENU_LABEL : WATCH_MENU_LABEL\)\)/.test(script),
+    'both shapes get the entry prepended, worded for the menu it is going into'
+  );
+});
+
+test('the menu icon is built as NODES, never with innerHTML', () => {
+  // youtube.com enforces Trusted Types (`require-trusted-types-for 'script'`), and
+  // there `element.innerHTML = '…'` THROWS — which is how the entry came to be
+  // built never: the icon assignment threw and the whole item with it.
+  // The ASSIGNMENT is what throws; the word itself is only in comments here.
+  assert.ok(!/\.innerHTML\s*=/.test(script), 'nothing may assign innerHTML: it throws under Trusted Types');
+  assert.ok(script.includes('createElementNS'), 'the icon is built with createElementNS instead');
 });
 
 // ── The submission source the backend accepts ────────────────────────────
@@ -239,7 +296,13 @@ test('the injection RETRIES, rather than relying on the mutation observer alone'
   // never fires and the entry silently never appears. The retry is what makes
   // the feature work across both shapes; losing it would look like "the block
   // option is missing" with nothing else wrong.
-  assert.ok(script.includes('function scheduleMenuInjection()'), 'a bounded retry is required');
+  // The retry now carries the CARD whose ⋮ was clicked (`scheduleMenuInjection(card)`),
+  // because the entry has to know which channel it belongs to — the sheet renders
+  // in a document-level container, not inside the card.
+  assert.ok(
+    /function scheduleMenuInjection\(card = null\)/.test(script),
+    'a bounded retry is required, and it carries the menu’s owner'
+  );
   assert.ok(script.includes('menuRetryTimer = window.setTimeout(attempt, 150)'), 'the retry must be bounded');
   assert.ok(
     script.includes("'ytd-watch-metadata ytd-menu-renderer button"),
@@ -251,19 +314,20 @@ test('the injection RETRIES, rather than relying on the mutation observer alone'
   );
 });
 
-test('a failed channel read is refused rather than stored as a guessed handle', () => {
-  // The worker's `channel/block` derives identity from the href and refuses when
-  // there is none; a handle invented from a display name would block the wrong
-  // channel, or nothing at all, and would be written to storage either way.
+test('a display name is never promoted to a stored handle', () => {
+  // A handle invented from a display name (`"The Japanese Town"` →
+  // `@thejapanesetown`) matches nothing and blocks the wrong channel — or
+  // nothing — and would be written to storage either way. The handle and the id
+  // come from the URL; a name is stored as a name.
   const worker = readFileSync(resolve(ROOT, 'src/background/service-worker.js'), 'utf8');
   assert.ok(worker.includes("'channel/block'"), 'the worker must handle channel/block');
   assert.ok(
-    worker.includes('channelIdentity({ url: message.url ?? null })'),
-    'the block path must derive identity from the URL'
+    worker.includes('channelIdentity({ url })'),
+    'the block path must derive identity from the URL, and only from the URL'
   );
   assert.ok(
-    !/handle: message\.handle \?\? message\.name/.test(worker),
-    'a display name must never be promoted to a stored handle'
+    !/handle:\s*(message|target|fromPage)\.name/.test(worker),
+    'a display name must never be assigned to a handle'
   );
 });
 
@@ -308,7 +372,7 @@ test('the channel is found by the SHAPE of its link, not by an element path', ()
     'a fallback independent of markup is required'
   );
   assert.ok(
-    /readCard[\s\S]{0,600}CHANNEL_LINK_SELECTOR/.test(script),
+    /function readCardChannel[\s\S]{0,1200}CHANNEL_LINK_SELECTOR/.test(script),
     'a feed card must fall back to the shape too'
   );
 });

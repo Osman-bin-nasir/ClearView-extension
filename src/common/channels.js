@@ -18,9 +18,14 @@
  *
  * The HANDLE is the stored identity, as in the Android app. A handle survives a
  * rename of the channel's display NAME, which is the thing the user actually
- * sees; a block stored by display name would be silently lost the moment the
- * channel renamed itself. The channel ID is kept alongside it when the page
- * offered one, because a handle can be changed and an id cannot.
+ * sees. The channel ID is kept alongside it when the page offered one, because a
+ * handle can be changed and an id cannot.
+ *
+ * A displayed NAME is stored too, and it is the one identity that is weaker than
+ * the others: it is what a card with no channel link can be matched by, so a
+ * right-click on the current grid's thumbnail is a block that works rather than
+ * a menu entry that explains itself. Two channels can print the same name, which
+ * is why the handle and the id are still tried first everywhere.
  *
  * Pure: no Chrome APIs, no DOM. The whole point is that the block list can be
  * matched the same way from the worker, the content script and the tests.
@@ -100,6 +105,20 @@ export function identityFromName(name) {
     .replace(/[^\p{L}\p{N}._-]+/gu, '');
   const handle = normalizeHandle(collapsed);
   return handle ? { handle, channelId: null, name: String(name).trim() } : null;
+}
+
+/**
+ * A displayed channel NAME, folded for comparison — not a handle.
+ *
+ * Never stored as a handle and never invented into one: this exists so the same
+ * name seen on two surfaces compares equal, and nothing more. A handle derived
+ * from a name (`"The Japanese Town"` → `@thejapanesetown`) is a DIFFERENT value
+ * from that channel's real handle (`@TheJapaneseTown-jt6fy`), so comparing names
+ * to names is the only comparison that can work — and it is what lets a card
+ * that exposes no channel link at all still be filtered.
+ */
+export function normalizeChannelName(name) {
+  return String(name ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 /**
@@ -201,17 +220,24 @@ export function normalizeBlockedChannels(list) {
   const out = [];
   const handles = new Set();
   const ids = new Set();
+  const names = new Set();
 
   for (const raw of Array.isArray(list) ? list : []) {
     if (!raw || typeof raw !== 'object') continue;
     const handle = normalizeHandle(raw.handle ?? '');
     const channelId = normalizeChannelId(raw.channelId ?? '');
-    if (!handle && !channelId) continue;
+    const trimmedName = typeof raw.name === 'string' ? raw.name.trim() : '';
+    const normalizedName = normalizeChannelName(trimmedName);
+    // A NAME alone is a usable record — see `channelRecord` — so the only thing
+    // dropped here is a record with nothing at all in it.
+    if (!handle && !channelId && normalizedName === '') continue;
     if ((handle && handles.has(handle)) || (channelId && ids.has(channelId))) continue;
+    if (!handle && !channelId && names.has(normalizedName)) continue;
     if (handle) handles.add(handle);
     if (channelId) ids.add(channelId);
+    if (normalizedName !== '') names.add(normalizedName);
 
-    const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+    const name = trimmedName;
     out.push({
       handle: handle ?? null,
       channelId: channelId ?? null,
@@ -223,12 +249,26 @@ export function normalizeBlockedChannels(list) {
   return out;
 }
 
-/** A block record, from whatever the entry point could see. */
+/**
+ * A block record, from whatever the entry point could see.
+ *
+ * A record may now be built from the displayed NAME alone, and this is the one
+ * case where that is the right answer rather than a guess: YouTube's current
+ * grid renders a card's channel as an attributed string with a click command and
+ * NO href, so a right-click on a feed thumbnail has no handle to work with — and
+ * refusing the block would leave the user with a menu entry that does nothing.
+ *
+ * What makes it safe is that matching reads names too (`matchBlockedChannel`),
+ * so the record does what the user asked, and what is NOT safe is documented
+ * there: two channels can print the same name, so a name-only block can catch a
+ * namesake. It is still strictly worse than a handle, which is why the handle
+ * and the id are used whenever a surface offers one.
+ */
 export function channelRecord({ handle = null, channelId = null, name = null, source = 'manual', addedAt = null } = {}) {
   const normalizedHandle = normalizeHandle(handle ?? '');
   const normalizedId = normalizeChannelId(channelId ?? '');
-  if (!normalizedHandle && !normalizedId) return null;
   const trimmed = typeof name === 'string' ? name.trim() : '';
+  if (!normalizedHandle && !normalizedId && trimmed === '') return null;
   return {
     handle: normalizedHandle,
     channelId: normalizedId,
@@ -238,9 +278,9 @@ export function channelRecord({ handle = null, channelId = null, name = null, so
   };
 }
 
-/** The value a block is shown and submitted by: its handle, else its id. */
+/** The value a block is shown and submitted by: handle, else id, else name. */
 export function channelLabel(record) {
-  return record?.handle ?? record?.channelId ?? null;
+  return record?.handle ?? record?.channelId ?? record?.name ?? null;
 }
 
 /**
@@ -253,10 +293,19 @@ export function channelLabel(record) {
 export function addBlockedChannel(list, record) {
   const current = normalizeBlockedChannels(list);
   if (!record) return current;
+  const name = normalizeChannelName(record.name);
   const clash = current.some(
     (existing) =>
       (record.handle && existing.handle === record.handle) ||
-      (record.channelId && existing.channelId === record.channelId)
+      (record.channelId && existing.channelId === record.channelId) ||
+      // A name-only record matches by name, so a SECOND name-only record for the
+      // same name is the same block, not a second row in the UI.
+      (!record.handle &&
+        !record.channelId &&
+        name !== '' &&
+        !existing.handle &&
+        !existing.channelId &&
+        normalizeChannelName(existing.name) === name)
   );
   return clash ? current : [...current, record];
 }
@@ -265,9 +314,15 @@ export function addBlockedChannel(list, record) {
 export function removeBlockedChannel(list, label) {
   const handle = normalizeHandle(label ?? '');
   const channelId = normalizeChannelId(label ?? '');
+  // The displayed name is accepted too, and for one reason: [matchBlockedChannel]
+  // can report a match by NAME, and the UI unblocks with whatever that match was
+  // called. Without this, "Unblock" on a channel that matched by name would do
+  // nothing at all while saying it had.
+  const name = normalizeChannelName(label ?? '');
   return normalizeBlockedChannels(list).filter((entry) => {
     if (handle && entry.handle === handle) return false;
     if (channelId && entry.channelId === channelId) return false;
+    if (name !== '' && normalizeChannelName(entry.name) === name) return false;
     return true;
   });
 }
@@ -275,8 +330,9 @@ export function removeBlockedChannel(list, label) {
 /**
  * Does this identity match the block list?
  *
- * @param {{channels?: Iterable<string>, channelIds?: Iterable<string>}} blocked
- *        the effective block list — handles and ids, as the rule bundle holds them
+ * @param {{channels?: Iterable<string>, channelIds?: Iterable<string>, channelNames?: Iterable<string>}} blocked
+ *        the effective block list — handles, ids and displayed names, as the rule
+ *        bundle holds them
  * @param {object|null} identity  from [channelIdentity]
  * @returns {string|null} the label that matched, for display
  */
@@ -290,9 +346,16 @@ export function matchBlockedChannel(blocked, identity) {
   const id = normalizeChannelId(identity.channelId ?? '');
   if (has(blocked?.channelIds, id)) return id;
 
-  // Last resort: a bare display name, which is all some surfaces give. It is
-  // checked last because it is the weakest signal — a name can be printed
-  // identically by two channels.
+  // The displayed NAME, against the names the user blocked. This is what makes
+  // a blocked channel disappear from the CURRENT grid, where the channel is an
+  // attributed string with a click command and no href: the name is the only
+  // thing such a card gives. Checked after the handle and the id because a name
+  // is the weakest signal — two channels can print the same one.
+  const name = normalizeChannelName(identity.name ?? '');
+  if (name !== '' && has(blocked?.channelNames, name)) return name;
+
+  // Last resort: a name turned INTO a handle, which is right only when the
+  // channel's name happens to be its handle (`"MrBeast"` → `@mrbeast`).
   const fromName = identityFromName(identity.name ?? '');
   if (fromName && has(blocked?.channels, fromName.handle)) return fromName.handle;
 

@@ -1,50 +1,55 @@
 /*
- * The ClearView design system, shared by the popup, the options page and the
- * admin dashboard.
+ * The ClearView design system, shared by the popup, the options page, the admin
+ * dashboard and the blocked page.
  *
- * Colours, radii and type scale are lifted from the Android app's Block tab
- * (Material 3, teal primary #00695C on a paper background) so the browser
- * interface reads as the same product rather than a lookalike: the section
- * heading with its short teal rule, the icon-badged card, the pill switch and
- * the uppercase labels are all the app's own shapes.
+ * Deliberately plain: one neutral surface, hairline borders, no shadows, no
+ * coloured chrome and no icon badges. The interface is a settings screen, so it
+ * is built from type and spacing rather than decoration — a control, the label
+ * it belongs to, and the state it is in.
+ *
+ * Both colour schemes are defined from the same tokens, and the only accent is
+ * the ink itself: "on" is dark in light mode and light in dark mode, which is
+ * the one signal this UI actually needs to carry.
  */
 
 :root {
-  --bg: #edf1ef;
-  --surface: #fafcfb;
-  --surface-2: #f4f8f6;
-  --surface-3: #eef3f1;
-  --text: #171d1c;
-  --muted: #3f4947;
-  --outline: #c6d1ce;
-  --primary: #00695c;
-  --primary-contrast: #ffffff;
-  --primary-soft: rgba(0, 105, 92, 0.12);
-  --error: #b3261e;
-  --error-soft: rgba(179, 38, 30, 0.12);
-  --warning: #8a6d00;
-  --radius-card: 16px;
-  --radius-control: 10px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 4px 16px rgba(0, 0, 0, 0.04);
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --surface-3: #f4f4f5;
+  --text: #18181b;
+  --muted: #6b7280;
+  --faint: #9ca3af;
+  --outline: #e4e4e7;
+  --outline-strong: #d4d4d8;
+  --accent: #18181b;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(24, 24, 27, 0.06);
+  --error: #b42318;
+  --error-soft: rgba(180, 35, 24, 0.08);
+  --warning: #8a5a00;
+  --radius-card: 10px;
+  --radius-control: 8px;
   color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0f1514;
-    --surface: #141b1a;
-    --surface-2: #182120;
-    --surface-3: #1d2726;
-    --text: #dde4e3;
-    --muted: #b1ccc7;
-    --outline: #2a3a37;
-    --primary: #63dacb;
-    --primary-contrast: #003731;
-    --primary-soft: rgba(99, 218, 203, 0.16);
-    --error: #ffb4ab;
-    --error-soft: rgba(255, 180, 171, 0.14);
-    --warning: #e8c766;
-    --shadow: none;
+    --bg: #0b0b0c;
+    --surface: #111113;
+    --surface-2: #161618;
+    --surface-3: #1c1c1f;
+    --text: #ededef;
+    --muted: #a1a1aa;
+    --faint: #71717a;
+    --outline: #26262a;
+    --outline-strong: #33333a;
+    --accent: #ededef;
+    --accent-contrast: #111113;
+    --accent-soft: rgba(237, 237, 239, 0.08);
+    --error: #f97066;
+    --error-soft: rgba(249, 112, 102, 0.1);
+    --warning: #d8b26a;
   }
 }
 
@@ -57,88 +62,74 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  font-size: 14px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* ── Page header ───────────────────────────────────────────────────────── */
 
 .page-header {
-  padding: 14px 16px 12px;
+  padding: 16px 16px 8px;
 }
 
 .page-title {
   margin: 0;
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: -0.2px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .page-subtitle {
-  margin: 4px 0 0;
-  font-size: 12.5px;
+  margin: 2px 0 0;
+  font-size: 12px;
   color: var(--muted);
 }
 
 .scope-note {
-  margin: 6px 0 0;
+  margin: 8px 0 0;
   font-size: 11.5px;
-  color: var(--muted);
-  opacity: 0.9;
+  color: var(--faint);
 }
 
-/* ── Section heading (teal rule + uppercase label) ─────────────────────── */
+/* ── Section label ─────────────────────────────────────────────────────── */
 
 .section {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 14px 16px 2px;
-}
-
-.section::before {
-  content: "";
-  width: 3px;
-  height: 14px;
-  border-radius: 2px;
-  background: var(--primary);
+  padding: 18px 16px 6px;
 }
 
 .section-label {
-  font-size: 11.5px;
-  font-weight: 700;
-  letter-spacing: 0.8px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text);
+  color: var(--muted);
 }
 
-/* ── Cards ─────────────────────────────────────────────────────────────── */
+/* ── Rows ──────────────────────────────────────────────────────────────── */
+/*
+ * A card here is a ROW: one control with its label, separated by a hairline.
+ * Cards are grouped inside a bordered block so a long settings page still reads
+ * as a list rather than a stack of floating boxes.
+ */
 
 .card {
   background: var(--surface);
-  border: 1px solid var(--outline);
-  border-radius: var(--radius-card);
-  padding: 14px;
-  margin: 10px 16px;
-  box-shadow: var(--shadow);
+  border-bottom: 1px solid var(--outline);
+  padding: 12px 16px;
+}
+
+/* A section label opens a group, so the row directly under one gets its top
+   edge. (A `:first-of-type` rule cannot do this: the label above it is a div
+   too, so the "first" card would sometimes be the second row.) */
+.section + .card {
+  border-top: 1px solid var(--outline);
 }
 
 .card-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
-}
-
-.card-icon {
-  flex: none;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-control);
-  background: var(--primary-soft);
-  color: var(--primary);
-  display: grid;
-  place-items: center;
-  font-size: 18px;
 }
 
 .card-titles {
@@ -147,8 +138,8 @@ body {
 }
 
 .card-title {
-  font-size: 14.5px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .card-subtitle {
@@ -158,21 +149,24 @@ body {
 }
 
 .card-body {
-  margin-top: 12px;
+  margin-top: 10px;
+}
+
+.card-body:first-child {
+  margin-top: 0;
 }
 
 .card-detail {
-  margin-top: 12px;
-  background: var(--surface-3);
-  border-radius: var(--radius-control);
-  padding: 10px 12px;
+  margin-top: 10px;
+  padding-left: 12px;
+  border-left: 1px solid var(--outline);
   font-size: 12px;
   color: var(--muted);
 }
 
 .card-detail ul {
   margin: 0;
-  padding-left: 16px;
+  padding-left: 14px;
 }
 
 .card-detail li + li {
@@ -184,13 +178,14 @@ body {
 .switch {
   flex: none;
   position: relative;
-  width: 44px;
-  height: 26px;
+  width: 34px;
+  height: 20px;
+  margin-top: 2px;
   border-radius: 999px;
-  border: 1px solid var(--outline);
+  border: 1px solid var(--outline-strong);
   background: var(--surface-3);
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition: background 0.12s ease, border-color 0.12s ease;
   padding: 0;
 }
 
@@ -199,27 +194,27 @@ body {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 20px;
-  height: 20px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: var(--surface);
-  border: 1px solid var(--outline);
-  transition: transform 0.15s ease;
+  border: 1px solid var(--outline-strong);
+  transition: transform 0.12s ease;
 }
 
 .switch[aria-checked="true"] {
-  background: var(--primary);
-  border-color: var(--primary);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .switch[aria-checked="true"]::after {
-  transform: translateX(18px);
-  background: var(--primary-contrast);
+  transform: translateX(14px);
+  background: var(--accent-contrast);
   border-color: transparent;
 }
 
 .switch:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
@@ -227,38 +222,43 @@ body {
 
 .btn {
   font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 8px 14px;
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 7px 12px;
   border-radius: var(--radius-control);
-  border: 1px solid var(--outline);
+  border: 1px solid var(--outline-strong);
   background: var(--surface);
   color: var(--text);
   cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
 
 .btn:hover:not(:disabled) {
-  background: var(--primary-soft);
+  background: var(--surface-3);
 }
 
 .btn:disabled {
-  opacity: 0.55;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
 .btn.primary {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--primary-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
 }
 
 .btn.primary:hover:not(:disabled) {
-  filter: brightness(1.08);
+  opacity: 0.88;
 }
 
 .btn.danger {
   color: var(--error);
-  border-color: var(--error);
+  border-color: var(--outline-strong);
+}
+
+.btn.danger:hover:not(:disabled) {
+  background: var(--error-soft);
 }
 
 .btn.small {
@@ -269,7 +269,7 @@ body {
 .btn-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 /* ── Inputs ────────────────────────────────────────────────────────────── */
@@ -277,24 +277,29 @@ body {
 .input,
 .select {
   font: inherit;
-  font-size: 13px;
-  padding: 8px 10px;
+  font-size: 12.5px;
+  padding: 7px 10px;
   border-radius: var(--radius-control);
-  border: 1px solid var(--outline);
-  background: var(--surface-2);
+  border: 1px solid var(--outline-strong);
+  background: var(--surface);
   color: var(--text);
   width: 100%;
 }
 
+.input::placeholder {
+  color: var(--faint);
+}
+
 .input:focus,
 .select:focus {
-  outline: 2px solid var(--primary-soft);
-  border-color: var(--primary);
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .field-row {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
 }
 
@@ -309,20 +314,20 @@ body {
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  font-weight: 600;
-  padding: 3px 8px;
+  font-weight: 500;
+  padding: 2px 7px;
   border-radius: 999px;
   background: var(--surface-3);
   color: var(--muted);
 }
 
 .pill.ok {
-  background: var(--primary-soft);
-  color: var(--primary);
+  background: var(--accent-soft);
+  color: var(--text);
 }
 
 .pill.pending {
-  background: rgba(138, 109, 0, 0.14);
+  background: var(--surface-3);
   color: var(--warning);
 }
 
@@ -343,17 +348,17 @@ body {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  padding: 4px 8px;
-  border-radius: 999px;
+  padding: 3px 8px;
+  border-radius: 6px;
   background: var(--surface-3);
-  border: 1px solid var(--outline);
+  border: 1px solid transparent;
 }
 
 .chip button {
   all: unset;
   cursor: pointer;
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--faint);
+  font-size: 12px;
   line-height: 1;
 }
 
@@ -368,19 +373,19 @@ body {
 }
 
 .empty {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
-  padding: 6px 0;
+  padding: 4px 0;
 }
 
 .status-line {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
-  margin-top: 10px;
-  min-height: 18px;
+  margin-top: 8px;
+  min-height: 16px;
 }
 
 .status-line.error {
@@ -389,7 +394,7 @@ body {
 
 .row-between {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
 }
@@ -397,12 +402,12 @@ body {
 .stack {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .toggle-group {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   margin-top: 10px;
 }
 
@@ -411,15 +416,15 @@ body {
 }
 
 .toggle-group .btn.selected {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--primary-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
 }
 
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  gap: 6px;
   margin-top: 10px;
 }
 
@@ -431,8 +436,8 @@ body {
 }
 
 .stat-value {
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .stat-label {
@@ -445,10 +450,10 @@ body {
 }
 
 .spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--outline);
-  border-top-color: var(--primary);
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid var(--outline-strong);
+  border-top-color: var(--text);
   border-radius: 50%;
   animation: cv-spin 0.7s linear infinite;
 }
@@ -462,7 +467,7 @@ body {
 table.admin-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: 12px;
 }
 
 table.admin-table th,
@@ -475,7 +480,8 @@ table.admin-table td {
 
 table.admin-table th {
   font-size: 11px;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.04em;
   color: var(--muted);
 }

@@ -46,6 +46,54 @@ test('the guide, mini-guide and chip containers are all covered', () => {
   }
 });
 
+test('the label is matched on the element AND on a descendant', () => {
+  // YouTube puts `title="Shorts"` on the inner anchor while the element that
+  // has to be hidden is the renderer wrapping it. Matching only one of the two
+  // leaves the icon visible.
+  assert.ok(
+    css.includes(':has([title="Shorts"])') && css.includes('[title="Shorts"]'),
+    'the stylesheet must match the label on the element and on a descendant'
+  );
+  assert.ok(
+    script.includes('querySelector(\'[title="Shorts"], [aria-label="Shorts"]\')') &&
+      script.includes("getAttribute('title')"),
+    'the content script must match the label on the element and on a descendant'
+  );
+});
+
+test('the Shorts SHELF is hidden, not only the entry point', () => {
+  // Hiding the sidebar icon alone left the Shorts row in the feed on screen,
+  // which is what the toggle is supposed to prevent.
+  for (const selector of ['ytd-rich-shelf-renderer[is-shorts]', 'ytd-reel-shelf-renderer']) {
+    assert.ok(css.includes(selector), `the stylesheet should hide ${selector}`);
+  }
+  assert.ok(script.includes("'ytd-reel-shelf-renderer'"), 'the script should consider the reel shelf');
+  assert.ok(script.includes("'ytd-rich-shelf-renderer'"), 'the script should consider the rich shelf');
+});
+
+test('a Short card and the section that spaces the shelf are hidden too', () => {
+  for (const selector of ['ytm-shorts-lockup-view-model', 'ytd-rich-section-renderer']) {
+    assert.ok(css.includes(selector), `the stylesheet should account for ${selector}`);
+    assert.ok(script.includes(selector), `the script should account for ${selector}`);
+  }
+  // A Short mixed into an ordinary list is only identifiable by its badge.
+  assert.ok(
+    css.includes('overlay-style="SHORTS"') && script.includes('overlay-style="SHORTS"'),
+    'the thumbnail Shorts badge must be used to hide list-feed Shorts'
+  );
+});
+
+test('the channel page Shorts tab is hidden', () => {
+  assert.ok(css.includes('yt-tab-shape[tab-title="Shorts"]'), 'the stylesheet should hide the tab');
+  assert.ok(script.includes("'yt-tab-shape'"), 'the script should consider the tab');
+});
+
+test('hiding a Shorts surface is resolved to the element to hide', () => {
+  // The shelf must take its section wrapper with it, or the grid keeps the row.
+  assert.ok(script.includes('shelfContainer'), 'a shelf should be resolved through its wrapper');
+  assert.ok(script.includes('shortsTarget'), 'one resolver should decide what each candidate means');
+});
+
 test('hiding is re-applied on DOM mutations, not only on navigation', () => {
   // YouTube re-renders the guide after load; a one-shot pass stops working.
   assert.ok(

@@ -22,7 +22,7 @@
  * there is one definition of what a channel is.
  */
 
-import { channelIdentity, parseChannelUrl } from '../common/channels.js';
+import { parseChannelUrl } from '../common/channels.js';
 import { isYouTubeHost } from '../common/search-engines.js';
 
 export const CONTEXT_MENU_ID = 'clearview-block-channel';
@@ -62,20 +62,32 @@ export function installContextMenus() {
 /**
  * Resolve the channel a context-menu click was aimed at.
  *
+ * Returns a TARGET — a URL, a name, an id — and never a derived identity. That
+ * separation is the point: a display name must never be turned into a handle
+ * (`channelIdentity` would, through its name fallback), because `"Some Channel"
+ * → @somechannel` is a value the user never chose that matches nothing. What a
+ * name CAN do is be stored as a name and matched as a name, and that decision
+ * belongs to `channelRecord`, not here.
+ *
  * Pure in everything except the `askPage` callback, so the URL path is testable
  * without a browser.
  *
  * @param {{linkUrl?: string, pageUrl?: string}} info   Chrome's click info
  * @param {{id?: number}} tab         the tab that was right-clicked
  * @param {(tabId: number|undefined) => Promise<{url?: string|null, name?: string|null}|null>} askPage
- * @returns {Promise<{identity: {handle: string|null, channelId: string|null, name: string|null}|null, reason: string}>}
+ * @returns {Promise<{target: {url: string|null, name: string|null, channelId: null}|null, reason: string}>}
+ *        `reason` is `channel-link`, `page` (the card named a channel), `page-name`
+ *        (the card printed a name and nothing else), `page-url` (the page is a
+ *        channel's), or one of the refusals.
  */
 export async function resolveContextTarget(info, tab, askPage) {
   const linkUrl = typeof info?.linkUrl === 'string' ? info.linkUrl.trim() : '';
 
   if (linkUrl !== '') {
-    const fromLink = parseChannelUrl(linkUrl);
-    if (fromLink) return { identity: { ...fromLink, name: null }, reason: 'channel-link' };
+    // A channel link names the channel outright; nothing else is needed.
+    if (parseChannelUrl(linkUrl)) {
+      return { target: { url: linkUrl, name: null, channelId: null }, reason: 'channel-link' };
+    }
 
     let host = '';
     try {
@@ -84,22 +96,41 @@ export async function resolveContextTarget(info, tab, askPage) {
       host = '';
     }
     // A link somewhere else on the page — a description, a comment, an ad.
-    if (!isYouTubeHost(host)) return { identity: null, reason: 'not-a-youtube-link' };
+    if (!isYouTubeHost(host)) return { target: null, reason: 'not-a-youtube-link' };
   }
 
+  // A thumbnail links to a VIDEO, and a video's URL names no channel — so the
+  // page is asked, and it answers with whatever its card actually has: a link on
+  // the classic card, only a name on the current grid's.
   const fromPage = await askPage(tab?.id);
-  const identity = channelIdentity({ url: fromPage?.url ?? null, name: fromPage?.name ?? null });
-  if (identity) return { identity, reason: 'page' };
+  const cardUrl = typeof fromPage?.url === 'string' ? fromPage.url.trim() : '';
+  const cardName = typeof fromPage?.name === 'string' ? fromPage.name.trim() : '';
 
-  // A last resort that needs no help from the page: if the page we are on IS a
-  // channel's page, then every video on it belongs to that channel, and the
-  // address bar already names it. This covers the case the content script cannot
-  // answer at all — a tab still running a content script from before the
-  // extension was reloaded — which would otherwise look like "Block did nothing".
-  const fromPageUrl = parseChannelUrl(typeof info?.pageUrl === 'string' ? info.pageUrl : '');
-  if (fromPageUrl) return { identity: { ...fromPageUrl, name: null }, reason: 'page-url' };
+  // Order matters, and this is the order:
+  //
+  //   1. the channel link the CARD carries — exact, and about the card clicked;
+  //   2. the PAGE's own URL when the page is a channel's — exact, and a definite
+  //      answer to "whose video is this";
+  //   3. the channel NAME the card prints — the weakest signal, because two
+  //      channels can print the same name.
+  //
+  // The page URL is ahead of the name on purpose. On a channel's own grid the
+  // first row a card prints is its VIEWS, not a channel, and a name read from
+  // there would be stored as a block matching nothing ("772K").
+  if (cardUrl !== '') {
+    return { target: { url: cardUrl, name: cardName === '' ? null : cardName, channelId: null }, reason: 'page' };
+  }
 
-  return { identity: null, reason: linkUrl === '' ? 'no-target' : 'video-without-channel' };
+  const pageUrl = typeof info?.pageUrl === 'string' ? info.pageUrl.trim() : '';
+  if (pageUrl !== '' && parseChannelUrl(pageUrl)) {
+    return { target: { url: pageUrl, name: null, channelId: null }, reason: 'page-url' };
+  }
+
+  if (cardName !== '') {
+    return { target: { url: null, name: cardName, channelId: null }, reason: 'page-name' };
+  }
+
+  return { target: null, reason: linkUrl === '' ? 'no-target' : 'video-without-channel' };
 }
 
 /**
@@ -113,7 +144,10 @@ export function unresolvableMessage(reason) {
     case 'not-a-youtube-link':
       return 'That link is not a YouTube channel. Right-click a video thumbnail or a channel name to block a channel.';
     case 'video-without-channel':
-      return 'ClearView could not read the channel for that video. Open the video and use the ⋮ menu instead.';
+      // The likeliest cause is a tab still running the previous version of the
+      // content script, so the first thing to try is named here rather than
+      // leaving the user with a menu entry that appears broken.
+      return 'ClearView could not read this video’s channel. Reload the YouTube tab if ClearView was just updated — otherwise open the video and use the ⋮ menu.';
     default:
       return 'ClearView could not tell which channel that was. Right-click a thumbnail or open the video and use the ⋮ menu.';
   }

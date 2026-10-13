@@ -61,11 +61,16 @@ export function switchControl(checked, onChange, { disabled = false } = {}) {
   return button;
 }
 
-/** A card with the app's icon-badge header. Returns { card, body }. */
-export function card({ icon, title, subtitle, trailing, detail }) {
+/**
+ * One settings row: a label, an optional trailing control, and a body.
+ *
+ * No icon. An emoji badge above every row is decoration that carries no
+ * information — the title already says what the row does — and it costs the
+ * label its width on a 360px popup. Returns `{ card, body }`.
+ */
+export function card({ title, subtitle, trailing, detail }) {
   const body = el('div', { class: 'card-body' });
   const head = el('div', { class: 'card-head' }, [
-    el('div', { class: 'card-icon', text: icon ?? '🛡' }),
     el('div', { class: 'card-titles' }, [
       el('div', { class: 'card-title', text: title }),
       subtitle ? el('div', { class: 'card-subtitle', text: subtitle }) : null,
@@ -110,7 +115,10 @@ export function errorMessage(error) {
     case 'network_unavailable':
       return 'Could not reach the server. Nothing changed.';
     case 'invalid_anonymous_id':
-      return 'This install’s anonymous id was rejected. Tap “New identity” and try again.';
+      // No remedy is offered, because there is none to offer: the id is generated
+      // once on install and the extension no longer replaces it, so telling the
+      // user to "tap New identity" would point at a button that does not exist.
+      return 'This install’s anonymous id was rejected by the server, so nothing was sent.';
     case 'invalid_request':
       return 'That input was not accepted. Check it and try again.';
     case 'invalid_keyword':
@@ -122,6 +130,11 @@ export function errorMessage(error) {
     case 'rate_limited':
     case 'too_many_requests':
       return 'Too many requests just now. Try again in a little while.';
+    case 'invalid_credentials':
+      // The extension holds no password and creates no accounts: an administrator
+      // is a BACKEND row. Saying so is the difference between "the button is
+      // broken" and "there is no account yet".
+      return 'That email and password were refused by the server. Admin accounts are created on the backend, not in the extension — the extension stores no password.';
     case 'missing_token':
     case 'invalid_token':
       return 'Sign in as an administrator to do that.';

@@ -12,8 +12,13 @@
   margin: 10vh auto 0;
 }
 
+/* The sign-in card stands alone rather than in a list of settings rows, so it
+   is drawn as a box: a full border, and no section label above it to borrow. */
 .gate .card {
   margin: 0;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-card);
+  padding: 16px;
 }
 
 .hint {
@@ -31,7 +36,7 @@
 
 .tabs {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   padding: 0 16px;
   border-bottom: 1px solid var(--outline);
   flex-wrap: wrap;
@@ -39,19 +44,19 @@
 
 .tab {
   font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 9px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 9px 10px;
   border: none;
   background: none;
   color: var(--muted);
-  border-bottom: 2px solid transparent;
+  border-bottom: 1px solid transparent;
   cursor: pointer;
 }
 
 .tab.selected {
-  color: var(--primary);
-  border-bottom-color: var(--primary);
+  color: var(--text);
+  border-bottom-color: var(--accent);
 }
 
 .card-detail code {
@@ -96,14 +101,13 @@
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 24px;
+  bottom: 20px;
   transform: translateX(-50%);
   background: var(--text);
   color: var(--bg);
-  padding: 10px 16px;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 600;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
   z-index: 10;
 }

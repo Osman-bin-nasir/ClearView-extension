@@ -17,7 +17,7 @@
  */
 
 import { MatchType, checkString } from '../common/matching.js';
-import { SAFE_SEARCH_DESTINATION, isShortsUrl, parseSearchUrl } from '../common/search-engines.js';
+import { isShortsUrl, parseSearchUrl, safeSearchDestination } from '../common/search-engines.js';
 import { channelIdentity, matchBlockedChannel, parseChannelUrl } from '../common/channels.js';
 
 const BLOCKED_PAGE_PATH = 'src/blocked/blocked.html';
@@ -39,6 +39,9 @@ function blockedChannelSets(bundle) {
     sets = {
       channels: new Set(bundle?.channels ?? []),
       channelIds: new Set(bundle?.channelIds ?? []),
+      // The displayed names, so a card that carries no channel link can still be
+      // matched — see `matchBlockedChannel` and the current grid's markup.
+      channelNames: new Set(bundle?.channelNames ?? []),
     };
     channelSetCache.set(bundle, sets);
   }
@@ -127,6 +130,11 @@ export function evaluateUrl(url, state) {
   // 1. Searching is checked BEFORE the URL, because a search-results URL
   //    contains the query: without this order, a blocked search would be
   //    reported as a blocked page. The app draws the same distinction.
+  //
+  //    The query is read on EVERY site, not only on the named engines, so the
+  //    phrase tier applies wherever it is typed — see `parseSearchUrl`. The
+  //    keyword set is the same one the URL check uses, so the two cannot
+  //    disagree about what the user blocked.
   const search = parseSearchUrl(url);
   if (search) {
     const verdict = checkString(search.query, {
@@ -195,11 +203,13 @@ export async function installDomainRules(domains) {
 /**
  * Per-tab record of the last redirect we issued, keyed by tab id.
  *
- * A blocked page offers "Go back", and going back to the blocked URL is
- * redirected again — that is intended. What this guards is the pathological
- * case: a redirect target that is itself blocked (a user keyword could match the
- * redirect URL). The target is remembered so the same tab is not bounced to it
- * twice in a row.
+ * What this guards is the pathological case: a redirect target that is itself
+ * blocked (a user keyword could match the redirect URL). The target is remembered
+ * so the same tab is not bounced to it twice in a row.
+ *
+ * Back off the blocked page is NOT this guard's business any more: the blocked
+ * page answers it itself, by leaving for YouTube's home page rather than
+ * re-requesting the address that was blocked.
  */
 const lastRedirect = new Map();
 
@@ -218,8 +228,11 @@ export async function handleNavigation(details, state) {
   const decision = evaluateUrl(details.url, state);
   if (decision.action === 'allow') return decision;
 
+  // A search goes to a search destination, chosen by WHERE the search was made:
+  // on YouTube the user keeps YouTube (its home page), everywhere else the
+  // Google safe page. Neither carries the blocked query.
   const target = decision.action === 'search'
-    ? SAFE_SEARCH_DESTINATION
+    ? safeSearchDestination(decision.engine)
     : blockedPageUrl(decision.reason ?? reasonFor(decision.matchType));
 
   const previous = lastRedirect.get(details.tabId);
@@ -287,19 +300,20 @@ export function evaluateFeedCards(cards, state) {
   const blocked = [];
   if (!settings?.protectionEnabled || !bundle) return blocked;
 
-  const { channels: blockedChannels, channelIds } = blockedChannelSets(bundle);
-  const hasChannelRules = blockedChannels.size > 0 || channelIds.size > 0;
+  const { channels: blockedChannels, channelIds, channelNames } = blockedChannelSets(bundle);
+  const hasChannelRules = blockedChannels.size > 0 || channelIds.size > 0 || channelNames.size > 0;
   const filtersOn = Boolean(settings.brainBotEnabled);
 
   cards.forEach((card, index) => {
     if (hasChannelRules) {
       // The channel's own LINK is preferred over its printed name, because the
-      // link is YouTube's own claim about which channel this is.
+      // link is YouTube's own claim about which channel this is — but the
+      // current grid gives no link, and then the NAME is what matches.
       const identity = channelIdentity({
         url: typeof card?.channelUrl === 'string' ? card.channelUrl : null,
         name: typeof card?.channel === 'string' ? card.channel : null,
       });
-      const matched = matchBlockedChannel({ channels: blockedChannels, channelIds }, identity);
+      const matched = matchBlockedChannel({ channels: blockedChannels, channelIds, channelNames }, identity);
       if (matched) {
         blocked.push({ index, matchedItem: matched, via: 'channel' });
         return;
@@ -334,19 +348,32 @@ export function evaluateFeedCards(cards, state) {
 }
 
 /**
- * Install the navigation listener.
+ * Install the navigation listeners.
  *
  * Guarded because the worker can start more than once in a session
  * (`onInstalled`, `onStartup`, and the top-level boot all fire), and each call
  * would otherwise add another listener — so one navigation would be evaluated
  * two or three times.
+ *
+ * TWO events, ONE evaluation, and the second one is not a detail:
+ * `onBeforeNavigate` is a navigation that REPLACES the document, while
+ * `onHistoryStateUpdated` is a navigation that does not — the page changed the
+ * address itself with `history.pushState`. Modern sites search that way: typing
+ * in YouTube's own search box never leaves the document, so it fires no
+ * navigation event at all, and a listener that only knew `onBeforeNavigate`
+ * never saw the query. That is what "I searched it and nothing happened" was:
+ * the URL was right, the rules matched, and nothing ever asked.
+ *
+ * Both events hand the handler the same details shape, so both go through the
+ * same evaluation rather than a second, quietly-diverging copy of it.
  */
 let blockerInstalled = false;
 
 export function initBlocker({ getState, onBlocked }) {
   if (blockerInstalled) return;
   blockerInstalled = true;
-  chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
+
+  const evaluate = async (details) => {
     // Loaded here rather than before registration: a just-woken worker has no
     // state yet, and skipping the event because state was not ready would drop
     // exactly the navigation that woke it.
@@ -356,7 +383,12 @@ export function initBlocker({ getState, onBlocked }) {
     if (outcome.action !== 'allow' && outcome.applied) {
       onBlocked?.(outcome, details.url);
     }
-  });
+  };
+
+  chrome.webNavigation.onBeforeNavigate.addListener(evaluate);
+  // …and the same-document half, without which a search typed into a site's own
+  // search box is never evaluated.
+  chrome.webNavigation.onHistoryStateUpdated.addListener(evaluate);
 }
 
 export { BLOCKED_PAGE_PATH };

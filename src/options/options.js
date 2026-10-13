@@ -12,7 +12,7 @@
 import { BRAIN_BOT_MODES, SUBMISSION_STATUS } from '../common/constants.js';
 import { normalizeDomain } from '../common/matching.js';
 import { normalizeHandle } from '../common/rules-bundle.js';
-import { BLOCK_SOURCES } from '../common/channels.js';
+import { BLOCK_SOURCES, channelLabel } from '../common/channels.js';
 import {
   card,
   clear,
@@ -78,14 +78,16 @@ function render() {
 
   content.append(
     card({
-      icon: protectionOn ? '🔒' : '🔓',
       title: 'Protection',
       subtitle: protectionOn ? 'Active — monitoring websites and searches' : 'Off — nothing is blocked',
       trailing: switchControl(protectionOn, (value) => patch({ protectionEnabled: value })),
       detail: [
         'The built-in adult filter, your blocked websites, your keywords and any shared rules all apply while Protection is on.',
         'Turning Protection off stops every block immediately — websites, searches, Shorts and Brain Bot alike.',
-        `Rules in force: ${bundleCounts.domains} hosts · ${bundleCounts.builtIn + bundleCounts.everywhere} keywords · ${bundleCounts.channels} channels`,
+        // Channels are counted by handle, by id AND by name: a block made from a
+        // feed thumbnail has no handle to count, and leaving it out made the
+        // header read "0 channels" next to a list that plainly had one.
+        `Rules in force: ${bundleCounts.domains} hosts · ${bundleCounts.builtIn + bundleCounts.everywhere} keywords · ${(bundleCounts.channels ?? 0) + (bundleCounts.channelIds ?? 0) + (bundleCounts.channelNames ?? 0)} channels`,
       ],
     }).card
   );
@@ -96,7 +98,6 @@ function render() {
   content.append(shortsCard(protectionOn));
   content.append(
     managerCard({
-      icon: '🔤',
       title: 'Brain Bot keywords',
       subtitle: 'Matched against YouTube titles only — never against other websites.',
       placeholder: 'e.g. a phrase you keep seeing',
@@ -113,7 +114,6 @@ function render() {
   content.append(section('My blocked items'));
   content.append(
     card({
-      icon: '⚠️',
       title: 'Strict Mode',
       subtitle: 'Also blocks discovery words like bikini, lingerie or cleavage.',
       trailing: switchControl(settings.strictMode, (value) => patch({ strictMode: value }), {
@@ -128,7 +128,6 @@ function render() {
   );
   content.append(
     managerCard({
-      icon: '🚫',
       title: 'Blocked websites',
       subtitle: 'Blocked everywhere you browse.',
       placeholder: 'e.g. youtube.com, reddit.com',
@@ -148,7 +147,6 @@ function render() {
   );
   content.append(
     managerCard({
-      icon: '🔤',
       title: 'Blocked keywords',
       subtitle: 'Blocked on every website and every search.',
       placeholder: 'e.g. instagram, tiktok',
@@ -176,7 +174,6 @@ function render() {
   content.append(identityCard(anonymousId));
   content.append(
     card({
-      icon: '🕵️',
       title: 'Privacy',
       subtitle: 'Nothing here is linked to who you are.',
       detail: [
@@ -193,7 +190,6 @@ function render() {
 function brainBotCard(protectionOn) {
   const status = el('div', { class: 'status-line' });
   const node = card({
-    icon: '🧠',
     title: 'Brain Bot Protection',
     subtitle: 'Filter unwanted content from YouTube feeds using keywords and channels.',
     trailing: switchControl(state.settings.brainBotEnabled, (value) => patch({ brainBotEnabled: value }), {
@@ -230,7 +226,6 @@ function brainBotCard(protectionOn) {
 
 function shortsCard(protectionOn) {
   return card({
-    icon: '▶️',
     title: 'Block YouTube Shorts',
     subtitle: 'Hides the Shorts entry point and blocks Shorts links.',
     trailing: switchControl(state.settings.blockShorts, (value) => patch({ blockShorts: value }), {
@@ -256,7 +251,6 @@ function shortsCard(protectionOn) {
 function blockedChannelsCard(protectionOn) {
   const status = el('div', { class: 'status-line' });
   const node = card({
-    icon: '📺',
     title: 'Blocked channels',
     subtitle: 'Their videos leave your YouTube feeds, and their channel page and videos will not open.',
     detail: [
@@ -317,11 +311,16 @@ function blockedChannelsCard(protectionOn) {
 /** One blocked channel: what it is, where the block came from, and what to do. */
 function blockedChannelRow(channel, protectionOn) {
   const rowStatus = el('div', { class: 'status-line' });
-  const label = channel.handle ?? channel.channelId;
+  // Handle, else channel id, else the displayed name: a block made from a feed
+  // card whose channel carries no link has only the name to go on.
+  const label = channelLabel(channel);
 
   const meta = [];
   if (channel.handle && channel.name) meta.push(channel.handle);
   if (channel.channelId) meta.push(channel.channelId);
+  // A name-only block has no handle to show, so the row must say what it WILL
+  // match on — otherwise it looks like a row with no identity at all.
+  if (!channel.handle && !channel.channelId && channel.name) meta.push('matched by name');
   if (channel.addedAt) meta.push(relativeTime(channel.addedAt));
   meta.push(BLOCK_SOURCES[channel.source] ?? 'Blocked');
 
@@ -477,7 +476,6 @@ function addTo(key, value) {
 function globalRulesCard(globalRules) {
   const status = el('div', { class: 'status-line' });
   const node = card({
-    icon: '🌍',
     title: 'Shared blocklist',
     subtitle: globalRules.available
       ? `${globalRules.keywordCount} keywords · ${globalRules.channelCount} channels blocked for everyone`
@@ -519,7 +517,6 @@ function globalRulesCard(globalRules) {
 
 function submissionsCard(globalRules) {
   const node = card({
-    icon: '📨',
     title: 'My submissions',
     subtitle: 'What you asked to be blocked for everyone, and where each request stands.',
     trailing: el('button', {
@@ -614,7 +611,6 @@ function suggestCard() {
   });
 
   const node = card({
-    icon: '✉️',
     title: 'Ask to block it for everyone',
     subtitle: 'An administrator reviews each request before it applies to anyone.',
     detail: [
@@ -636,7 +632,6 @@ function suggestCard() {
 function activityCard(stats) {
   const status = el('div', { class: 'status-line' });
   const node = card({
-    icon: '📊',
     title: 'Recent activity',
     subtitle: 'What ClearView blocked on this device.',
     trailing: el('button', {
@@ -694,7 +689,6 @@ function serverCard(settings) {
   const status = el('div', { class: 'status-line' });
   const input = el('input', { class: 'input', value: settings.apiBase });
   const node = card({
-    icon: '🔌',
     title: 'Backend server',
     subtitle: 'Where shared rules and review requests are exchanged.',
     detail: [
@@ -740,37 +734,22 @@ function serverCard(settings) {
   return node.card;
 }
 
+/**
+ * The install's anonymous id — read-only.
+ *
+ * This card used to offer "New identity", which regenerated the id on demand.
+ * That is gone: the id is the one thing that ties an install's contributions
+ * together server-side, and a button that silently breaks that link is not
+ * something the user can be expected to weigh up at the moment they press it.
+ * Generated once on install (`getAnonymousId`), shown here, and never replaced.
+ */
 function identityCard(anonymousId) {
-  const status = el('div', { class: 'status-line' });
   const node = card({
-    icon: '🎭',
     title: 'Anonymous identity',
     subtitle: 'The random id your contributions are sent with.',
-    detail: [
-      'Generated on this device and derived from nothing about you — no account, no device id.',
-      'Regenerating it costs at most a duplicate report; nothing else is lost.',
-    ],
+    detail: ['Generated on this device and derived from nothing about you — no account, no device id.'],
   });
-  node.body.append(
-    el('div', { class: 'identity', text: anonymousId }),
-    el('div', { class: 'btn-row', style: 'margin-top:10px' }, [
-      el('button', {
-        class: 'btn',
-        type: 'button',
-        text: 'New identity',
-        onclick: async () => {
-          try {
-            state = await send('identity/regenerate');
-            render();
-            notify('A new anonymous id was generated.');
-          } catch (error) {
-            statusLine(status, errorMessage(error), true);
-          }
-        },
-      }),
-    ]),
-    status
-  );
+  node.body.append(el('div', { class: 'identity', text: anonymousId }));
   return node.card;
 }
 

@@ -91,8 +91,14 @@ function stubChrome({ pageReply = null, pageUnreachable = false } = {}) {
         badge.title = title;
       },
     },
-    // The rest is only touched at import time and never exercised here.
-    webNavigation: { onBeforeNavigate: { addListener: () => {} } },
+    // The rest is only touched at import time and never exercised here. BOTH
+    // navigation events matter: the worker registers its evaluator for a document
+    // navigation and for a same-document one (a site's own search box), so a stub
+    // missing either one fails at import.
+    webNavigation: {
+      onBeforeNavigate: { addListener: () => {} },
+      onHistoryStateUpdated: { addListener: () => {} },
+    },
     declarativeNetRequest: { getDynamicRules: async () => [], updateDynamicRules: async () => {} },
     alarms: { create: () => {}, onAlarm: { addListener: () => {} } },
     permissions: { contains: async () => true, request: async () => true },
@@ -202,6 +208,24 @@ test('the blocked channel is visible to the extension UI afterwards', async () =
   assert.equal(state.bundleCounts.channels, 1);
 });
 
+test('a block stored by NAME is counted, so the toast cannot say “0 channels”', async () => {
+  // What a right-click on the current grid produces: the card carries no channel
+  // link, so the block is stored by the name it prints. Counting only handles and
+  // ids made the toast that CONFIRMS the block read "0 channels blocked".
+  const stub = await loadWorker({ pageReply: { url: null, name: 'The Japanese Town' } });
+  await clickMenuItem(stub, { menuItemId: MENU_ID, linkUrl: 'https://www.youtube.com/watch?v=abc123' });
+
+  const written = stub.sync[SETTINGS_KEY];
+  assert.equal(written.blockedChannels[0].name, 'The Japanese Town');
+  assert.equal(written.blockedChannels[0].handle, null, 'no handle may be invented from a name');
+
+  const state = await callWorker(stub, { type: 'state/get' });
+  assert.equal(state.bundleCounts.channelNames, 1, 'the name-only block is in force');
+  const told = stub.messagesToTab.filter((m) => m.message.type === 'channel/blockResult');
+  assert.match(told[0].message.text, /Blocked The Japanese Town/);
+  assert.match(told[0].message.text, /1 channel blocked/, 'the count has to include it');
+});
+
 test('the page is told what happened, so a silent block cannot happen', async () => {
   const stub = await loadWorker({ pageReply: { url: '/@FromThePage', name: 'From The Page' } });
   await clickMenuItem(stub, { menuItemId: MENU_ID, linkUrl: 'https://www.youtube.com/watch?v=abc123' });
@@ -289,13 +313,28 @@ test('a SUCCESS does not raise the badge', async () => {
   assert.equal(stub.badge.text, '', 'the page toast is the report; a badge would be noise');
 });
 
-test('the ⋮ menu refuses a channel it can only see the NAME of', async () => {
-  // A handle invented from a display name would be stored and would then block a
-  // channel the user never chose. Refusing is the correct behaviour, and it must
-  // be a refusal the UI can word rather than a silent no-op.
+test('a right-click on a card whose channel has no link blocks it BY NAME', async () => {
+  // YouTube's current grid gives a card's channel no href at all, so this is
+  // what a right-click on a feed thumbnail has to work with. It must end in a
+  // block the user asked for — and in a record that says NAME, never a handle
+  // invented from the name.
+  const stub = await loadWorker({ pageReply: { url: null, name: 'The Japanese Town' } });
+  await clickMenuItem(stub, { menuItemId: MENU_ID, linkUrl: 'https://www.youtube.com/watch?v=abc' });
+
+  const [record] = stub.sync[SETTINGS_KEY].blockedChannels;
+  assert.equal(record.handle, null, 'no handle may be invented from the name');
+  assert.equal(record.channelId, null);
+  assert.equal(record.name, 'The Japanese Town');
+  assert.equal(record.source, 'context-menu');
+  assert.match(stub.messagesToTab.at(-1).message.text, /The Japanese Town/);
+});
+
+test('a target with nothing in it is still refused', async () => {
+  // The refusal that matters stays: an empty payload must not become a record,
+  // or the menu entry could report a block it never made.
   const stub = await loadWorker();
   await assert.rejects(
-    () => callWorker(stub, { type: 'channel/block', name: 'Some Channel', source: 'youtube-menu' }),
+    () => callWorker(stub, { type: 'channel/block', source: 'youtube-menu' }),
     (error) => error.code === 'invalid_channel'
   );
   assert.equal(stub.sync[SETTINGS_KEY], undefined);

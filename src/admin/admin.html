@@ -13,22 +13,25 @@
       <section id="gate" class="gate hidden">
         <div class="card">
           <div class="card-head">
-            <div class="card-icon" aria-hidden="true">🔐</div>
             <div class="card-titles">
               <div class="card-title">Administrator sign-in</div>
               <div class="card-subtitle">Reviewing the shared blocklist requires an admin account.</div>
             </div>
-          </div>
-          <div class="card-body stack">
-            <input class="input" id="email" type="email" placeholder="Admin email" autocomplete="username" />
-            <input class="input" id="password" type="password" placeholder="Password" autocomplete="current-password" />
-            <button class="btn primary" id="signin" type="button">Sign in</button>
-            <div class="status-line" id="gate-status"></div>
-            <div class="hint">
-              The password is exchanged for a short-lived token and never stored. The server
-              re-checks every action, so nothing here can grant access it does not already have.
+          </div>            <div class="card-body stack">
+              <input class="input" id="email" type="email" placeholder="Admin email" autocomplete="username" />
+              <input class="input" id="password" type="password" placeholder="Password" autocomplete="current-password" />
+              <button class="btn primary" id="signin" type="button">Sign in</button>
+              <div class="status-line" id="gate-status"></div>
+              <div class="hint">
+                There is no sign-up here, and no password is stored in the extension: an admin
+                account lives on the ClearView server and is created there
+                (<code>npm run create-admin</code> in the backend repository). This form only
+                signs it in, and the server re-checks the account on every action. If every
+                password is refused, the deployment has none to offer — a stored hash alone
+                can never be checked — so set <code>SUPER_ADMIN_PASSWORD</code> on the server,
+                or rotate the account with <code>npm run create-admin -- --reset</code>.
+              </div>
             </div>
-          </div>
         </div>
       </section>
 

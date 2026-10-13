@@ -9,6 +9,7 @@
  */
 
 import { BRAIN_BOT_MODES } from '../common/constants.js';
+import { channelLabel } from '../common/channels.js';
 import { normalizeDomain } from '../common/matching.js';
 import {
   card,
@@ -64,7 +65,6 @@ function render() {
   // ── Protection ─────────────────────────────────────────────────────────
   content.append(
     card({
-      icon: '🔒',
       title: 'Protection',
       subtitle: protectionOn ? 'Active — blocking websites and searches' : 'Off — nothing is blocked',
       trailing: switchControl(protectionOn, (value) => patch({ protectionEnabled: value })),
@@ -80,7 +80,6 @@ function render() {
   content.append(section('YouTube protection'));
 
   const brainBot = card({
-    icon: '🧠',
     title: 'Brain Bot Protection',
     subtitle: 'Filter unwanted videos from YouTube feeds.',
     trailing: switchControl(settings.brainBotEnabled, (value) => patch({ brainBotEnabled: value }), {
@@ -106,7 +105,6 @@ function render() {
 
   content.append(
     card({
-      icon: '▶️',
       title: 'Block YouTube Shorts',
       subtitle: 'Hides the Shorts entry point and blocks Shorts links.',
       trailing: switchControl(settings.blockShorts, (value) => patch({ blockShorts: value }), {
@@ -122,7 +120,6 @@ function render() {
 
   content.append(
     card({
-      icon: '⚠️',
       title: 'Strict Mode',
       subtitle: 'Also blocks discovery words like bikini or lingerie.',
       trailing: switchControl(settings.strictMode, (value) => patch({ strictMode: value }), {
@@ -142,7 +139,6 @@ function render() {
   content.append(section('Protection activity'));
   const resetStatus = el('div', { class: 'status-line' });
   const activity = card({
-    icon: '📊',
     title: 'Recent activity',
     subtitle: `${stats.total ?? 0} item${(stats.total ?? 0) === 1 ? '' : 's'} blocked on this device`,
     trailing: el('button', {
@@ -185,10 +181,14 @@ function blockedChannelsCard(protectionOn) {
     chips.append(el('div', { class: 'empty', text: 'No channels blocked yet.' }));
   } else {
     for (const channel of channels) {
-      const label = channel.handle ?? channel.channelId;
+      // `channelLabel` is handle, else channel id, else the displayed name — a
+      // block made from a feed card whose channel has no link has only the name,
+      // and joining a name to a null label would print "Name · null".
+      const label = channelLabel(channel);
+      const text = channel.name && channel.name !== label ? `${channel.name} · ${label}` : label;
       chips.append(
         el('span', { class: 'chip' }, [
-          channel.name ? `${channel.name} · ${label}` : label,
+          text,
           el('button', {
             type: 'button',
             text: '✕',
@@ -209,7 +209,6 @@ function blockedChannelsCard(protectionOn) {
   }
 
   const node = card({
-    icon: '📺',
     title: 'Blocked channels',
     subtitle:
       channels.length === 0
@@ -267,7 +266,6 @@ function blockedSitesCard() {
   });
 
   const cardNode = card({
-    icon: '🚫',
     title: 'Blocked websites',
     subtitle: 'Blocked everywhere you browse.',
   });
@@ -325,7 +323,6 @@ function keywordCard() {
   });
 
   const cardNode = card({
-    icon: '🔤',
     title: 'Blocked keywords',
     subtitle: 'Blocked on every website and search.',
   });
@@ -362,7 +359,6 @@ function globalRulesCard(globalRules) {
   });
 
   const cardNode = card({
-    icon: '🌍',
     title: 'Shared blocklist',
     subtitle: globalRules.available
       ? `${globalRules.keywordCount} keywords · ${globalRules.channelCount} channels blocked for everyone`

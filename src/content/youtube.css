@@ -10,22 +10,83 @@
  * here blocks a URL — a Short reached directly still plays.
  */
 
-/* ── Shorts entry points ───────────────────────────────────────────────── */
+/* ── Shorts: entry points, feed shelves, and Shorts cards ──────────────── */
 /*
+ * Two different things are hidden here, and both are identified by SHAPE
+ * wherever a shape exists:
+ *
+ *  - the ENTRY POINTS — the sidebar item, the mini-guide item, the chip above
+ *    the feed — matched on a link to /shorts and on the `title`/`aria-label`
+ *    YouTube prints, because the label lives on a DESCENDANT of the element
+ *    that has to be hidden, not on the element itself;
+ *  - the SURFACES the content appears on — the home/subscription Shorts shelf,
+ *    the section that spaces it, an individual Short card in the grid, a Short
+ *    rendered as an ordinary list row, and the Shorts tab on a channel page.
+ *
+ * Hiding the entry point alone is why Shorts stayed on screen: the icon in the
+ * sidebar and the videos in the feed are two different things, and the toggle
+ * promises "no Shorts" — a hidden door with the room still on display is not
+ * that.
+ *
  * `[href^="/shorts"]` rather than `[href="/shorts"]`: YouTube writes the link as
  * "/shorts/" (with a trailing slash), so an exact-match selector silently
  * matched nothing and the icon stayed visible. Matching the PREFIX covers
  * "/shorts", "/shorts/" and "/shorts/<id>", and survives a relabel.
+ *
+ * The structural shapes (`:has(...)`) are duplicated in the content script,
+ * which walks the same relationships without `:has()`: the manifest allows
+ * Chrome 102, which has the rest of this stylesheet but not that selector, and
+ * a rule the browser cannot parse fails silently. The stylesheet is what hides
+ * an element the instant it is inserted; the script is the safety net.
  */
+
+/* The sidebar item and the mini-guide item. */
 html.cv-hide-shorts ytd-guide-entry-renderer:has(a[href^="/shorts"]),
 html.cv-hide-shorts ytd-guide-entry-renderer:has([title="Shorts"]),
 html.cv-hide-shorts ytd-guide-entry-renderer:has([aria-label="Shorts"]),
 html.cv-hide-shorts ytd-guide-entry-renderer[is-shorts],
+html.cv-hide-shorts ytd-guide-entry-renderer[title="Shorts"],
+html.cv-hide-shorts ytd-guide-entry-renderer[aria-label="Shorts"],
 html.cv-hide-shorts ytd-mini-guide-entry-renderer:has(a[href^="/shorts"]),
 html.cv-hide-shorts ytd-mini-guide-entry-renderer:has([title="Shorts"]),
+html.cv-hide-shorts ytd-mini-guide-entry-renderer:has([aria-label="Shorts"]),
+html.cv-hide-shorts ytd-mini-guide-entry-renderer[is-shorts],
+html.cv-hide-shorts ytd-mini-guide-entry-renderer[title="Shorts"],
 html.cv-hide-shorts ytd-mini-guide-entry-renderer[aria-label="Shorts"],
+/* The Shorts chip above the home and search results. */
 html.cv-hide-shorts yt-chip-cloud-chip-renderer:has(a[href^="/shorts"]),
-html.cv-hide-shorts yt-chip-cloud-chip-renderer:has([title="Shorts"]) {
+html.cv-hide-shorts yt-chip-cloud-chip-renderer:has([title="Shorts"]),
+html.cv-hide-shorts yt-chip-cloud-chip-renderer:has([aria-label="Shorts"]) {
+  display: none !important;
+}
+
+/* ── The shelf, its section wrapper, and the Shorts cards ──────────────── */
+/*
+ * `ytd-rich-section-renderer` is hidden as well as the shelf inside it: the
+ * section is the row the grid reserves for the shelf, so hiding only the shelf
+ * leaves its height behind as a gap.
+ */
+html.cv-hide-shorts ytd-reel-shelf-renderer,
+html.cv-hide-shorts ytd-rich-shelf-renderer[is-shorts],
+html.cv-hide-shorts ytd-rich-shelf-renderer:has(ytm-shorts-lockup-view-model),
+html.cv-hide-shorts ytd-rich-shelf-renderer:has(ytm-shorts-lockup-view-model-v2),
+html.cv-hide-shorts ytd-rich-section-renderer:has(ytd-reel-shelf-renderer),
+html.cv-hide-shorts ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[is-shorts]),
+html.cv-hide-shorts ytd-rich-section-renderer:has(ytm-shorts-lockup-view-model),
+html.cv-hide-shorts ytd-rich-section-renderer:has(ytm-shorts-lockup-view-model-v2),
+/* One Short, in the grid or in a shelf. */
+html.cv-hide-shorts ytd-rich-item-renderer:has(ytm-shorts-lockup-view-model),
+html.cv-hide-shorts ytd-rich-item-renderer:has(ytm-shorts-lockup-view-model-v2),
+html.cv-hide-shorts grid-shelf-view-model:has(ytm-shorts-lockup-view-model),
+html.cv-hide-shorts grid-shelf-view-model:has(ytm-shorts-lockup-view-model-v2),
+/* A Short rendered as an ordinary row in a list feed or a search result. */
+html.cv-hide-shorts ytd-video-renderer:has(ytd-thumbnail-overlay-time-status-renderer[overlay-style="SHORTS"]),
+html.cv-hide-shorts ytd-grid-video-renderer:has(ytd-thumbnail-overlay-time-status-renderer[overlay-style="SHORTS"]),
+html.cv-hide-shorts ytd-compact-video-renderer:has(ytd-thumbnail-overlay-time-status-renderer[overlay-style="SHORTS"]),
+html.cv-hide-shorts ytd-rich-item-renderer:has(ytd-thumbnail-overlay-time-status-renderer[overlay-style="SHORTS"]),
+/* The Shorts tab on a channel page. */
+html.cv-hide-shorts yt-tab-shape[tab-title="Shorts"],
+html.cv-hide-shorts yt-tab-shape:has(a[href$="/shorts"]) {
   display: none !important;
 }
 
@@ -84,6 +145,9 @@ html.cv-hide-shorts yt-chip-cloud-chip-renderer:has([title="Shorts"]) {
   align-items: center;
   gap: 16px;
   width: 100%;
+  /* The menus are sized by the page, and a content-box row would sit a few pixels
+     wider than the list that holds it. */
+  box-sizing: border-box;
   min-height: 36px;
   padding: 0 16px;
   border: 0;
@@ -119,9 +183,33 @@ html.cv-hide-shorts yt-chip-cloud-chip-renderer:has([title="Shorts"]) {
 
 .cv-menu-item__label {
   flex: 1 1 auto;
+  /* `min-width: 0` because the default (min-content) would let this label STRETCH
+     the page's own menu to fit it, rather than shortening itself. */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * A card's menu is a context sheet, and its rows are 40px — taller than the
+ * video page's 36px menu rows this entry was first built for. Matched by hand
+ * rather than shared, because the two menus are different components.
+ *
+ * Deliberately NOT touched: the sheet's own max-width. It is set from the longest
+ * row YouTube puts in it — which on a SEARCH card is "Send feedback", narrower
+ * than this label — and resizing the component to fit our row would be fighting
+ * its own measurement. The label wraps to a second line there instead.
+ */
+ytd-popup-container yt-sheet-view-model .cv-menu-item {
+  height: auto;
+  min-height: 40px;
+  padding: 8px 16px;
+}
+
+ytd-popup-container yt-sheet-view-model .cv-menu-item__label {
+  overflow: visible;
+  white-space: normal;
 }
 
 /* ── Toast ─────────────────────────────────────────────────────────────── */

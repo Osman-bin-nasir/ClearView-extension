@@ -145,7 +145,6 @@ async function renderOverview() {
   clear(panel);
 
   const node = card({
-    icon: '📊',
     title: 'Review status',
     subtitle: `${totals.all ?? 0} submissions in total`,
   });
@@ -164,7 +163,7 @@ async function renderOverview() {
 }
 
 function demandTable(title, rows) {
-  const node = card({ icon: '🔥', title, subtitle: 'What the community is asking for most.' });
+  const node = card({ title, subtitle: 'What the community is asking for most.' });
   if (rows.length === 0) {
     node.body.append(el('div', { class: 'empty', text: 'Nothing requested yet.' }));
     return node.card;
@@ -225,7 +224,6 @@ async function renderQueue() {
   );
 
   const node = card({
-    icon: '🗂️',
     title: 'Submissions',
     subtitle: `${submissions.length} shown`,
   });
@@ -327,7 +325,6 @@ async function renderRules() {
 
   panel.append(
     ruleTable({
-      icon: '🔤',
       title: 'Published keywords',
       subtitle: 'These are in force for every participating install.',
       rows: keywordData.keywords ?? [],
@@ -339,7 +336,6 @@ async function renderRules() {
   );
   panel.append(
     ruleTable({
-      icon: '📺',
       title: 'Published channels',
       subtitle: 'Blocked by @handle for every participating install.',
       rows: channelData.channels ?? [],
@@ -431,7 +427,6 @@ async function renderReports() {
   clear(panel);
 
   const node = card({
-    icon: '🚩',
     title: 'False-positive reports',
     subtitle: 'Targets users say should not have been blocked.',
   });
