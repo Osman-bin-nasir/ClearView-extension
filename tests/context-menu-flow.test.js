@@ -350,19 +350,34 @@ test('blocking the same channel twice does not create a second entry', async () 
 
 test('unblocking removes it again', async () => {
   const stub = await loadWorker({ pageReply: { url: '/@FromThePage', name: 'From The Page' } });
+  await callWorker(stub, { type: 'password/set', password: 'secret1' });
   await clickMenuItem(stub, { menuItemId: MENU_ID, linkUrl: 'https://www.youtube.com/watch?v=abc' });
   assert.equal(stub.sync[SETTINGS_KEY].blockedChannels.length, 1);
 
-  const state = await callWorker(stub, { type: 'channel/unblock', label: '@fromthepage' });
+  // Unblocking weakens protection, so it carries the password; blocking did not.
+  await assert.rejects(
+    () => callWorker(stub, { type: 'channel/unblock', label: '@fromthepage' }),
+    (error) => error.code === 'invalid_password'
+  );
+  const state = await callWorker(stub, {
+    type: 'channel/unblock',
+    label: '@fromthepage',
+    password: 'secret1',
+  });
   assert.equal(state.blockedChannels.length, 0);
 });
 
 test('a channel blocked by id alone can be unblocked by that id', async () => {
   const stub = await loadWorker();
   const UC = 'UCabcdefghijklmnopqrstuv';
+  await callWorker(stub, { type: 'password/set', password: 'secret1' });
   await callWorker(stub, { type: 'channel/block', url: `/channel/${UC}`, source: 'context-menu' });
   assert.equal(stub.sync[SETTINGS_KEY].blockedChannels[0].channelId, UC);
 
-  const state = await callWorker(stub, { type: 'channel/unblock', label: UC });
+  const state = await callWorker(stub, {
+    type: 'channel/unblock',
+    label: UC,
+    password: 'secret1',
+  });
   assert.equal(state.blockedChannels.length, 0);
 });

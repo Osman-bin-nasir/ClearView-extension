@@ -162,8 +162,10 @@ test('a card is judged again when the rules change, not remembered forever', () 
     'every applied verdict must stamp the revision it was decided under'
   );
   assert.ok(
-    /handled\.set\(element, \{ mode: 'clean', revision: config\.revision \}\)/.test(script),
-    'a clean verdict must be stamped too, or it can never go stale'
+    /handled\.set\(element, \{[\s\S]{0,80}mode: 'clean',[\s\S]{0,80}revision: config\.revision,[\s\S]{0,80}identity: cardIdentity\(element\)/.test(
+      script
+    ),
+    'a clean verdict must be stamped with the revision AND the identity it belongs to'
   );
 });
 
@@ -186,12 +188,17 @@ test('a card that is clean again is restored before it is marked clean', () => {
   // The verdict that justified an overlay or a hidden card can disappear while
   // the card itself is off screen; coming back clean must undo it.
   assert.ok(script.includes('function restoreCard'), 'restoring one card is the unit of work');
+  assert.ok(script.includes('function markCardClean'), 'the clean path is one helper, so it cannot drift');
   assert.ok(
-    /restoreCard\(element\);\s*handled\.set\(element, \{ mode: 'clean'/.test(script),
+    /function markCardClean\(element\)[\s\S]{0,260}restoreCard\(element\);/.test(script),
     'the clean path must restore the card first'
   );
   assert.ok(
-    /function reset\(\) \{[\s\S]{0,400}for \(const element of cardElements\(\)\) restoreCard\(element\);/.test(
+    /function markCardClean\(element\)[\s\S]{0,320}handled\.set\(element, \{[\s\S]{0,80}mode: 'clean'/.test(script),
+    'and only then record the clean verdict'
+  );
+  assert.ok(
+    /function reset\(\) \{[\s\S]{0,800}for \(const element of cardElements\(\)\) \{[\s\S]{0,140}restoreCard\(element\);/.test(
       script
     ),
     'a full reset must go through the same restore, so the two cannot drift'
@@ -209,7 +216,7 @@ test('the feed pass is bounded to what can be seen, and remembers verdicts', () 
     'a card far off screen is left undecided rather than sent to the worker'
   );
   assert.ok(
-    /if \(applyCachedVerdict\(element, card\)\) continue;/.test(script),
+    /if \(applyCachedVerdict\(element, card\)\) \{/.test(script),
     'a cached verdict is applied without a round-trip'
   );
   assert.ok(/rememberVerdict\(card, verdict\)/.test(script), 'blocked verdicts are remembered');
@@ -218,6 +225,55 @@ test('the feed pass is bounded to what can be seen, and remembers verdicts', () 
   assert.ok(
     /addEventListener\('scroll', scheduleScan/.test(script),
     'scrolling brings the cards that were skipped near the viewport'
+  );
+});
+
+test('Remove mode settles the cards its own layout shift reveals', () => {
+  // Hiding a blocked card collapses its grid cell and pulls the next row into
+  // view. That is a STYLE change, so the child-list MutationObserver does not
+  // fire and no scroll happened — the newly visible cards were never judged. A
+  // blocked channel’s Shorts stayed on its channel page, visible, until the user
+  // scrolled. The scan therefore chains one more pass while Remove mode still
+  // has an undecided card near the viewport.
+  assert.ok(
+    script.includes('function hasUndecidedCardNearViewport'),
+    'the removal pass needs to know whether the grid still has work'
+  );
+  assert.ok(
+    /function hasUndecidedCardNearViewport\(\)[\s\S]{0,500}readCard\(element\)\.title === ''/.test(
+      script
+    ),
+    'a title-less card must not spin the chain forever'
+  );
+  assert.ok(
+    /function followUpAfterRemoval\(applied\)[\s\S]{0,200}config\.brainBotMode !== 'remove'/.test(
+      script
+    ),
+    'only Remove mode changes the layout this way'
+  );
+  assert.ok(
+    /followUpAfterRemoval\(applied\);/.test(script),
+    'the scan must chain a pass after it has applied a decision'
+  );
+});
+
+test('the legacy Shorts shelf card is a card, not only the modern lockup', () => {
+  // YouTube still serves home/subscriptions Shorts as
+  // `ytd-reel-shelf-renderer > ytd-reel-item-renderer`: a thumbnail link and a
+  // title, with no `ytm-shorts-lockup-view-model` inside. It was therefore
+  // neither evaluated nor coverable, so a blocked channel's Short stayed on
+  // screen after a scroll and only the player refused it when clicked.
+  assert.ok(
+    /const CARD_SELECTOR = \[[\s\S]{0,900}'ytd-reel-item-renderer'/.test(script),
+    'the legacy reel item must be judged like any other card'
+  );
+  assert.ok(
+    /const CARD_SELECTOR = \[[\s\S]{0,900}'ytd-rich-grid-slim-media'/.test(script),
+    'a Short in the slim rich grid must be judged too'
+  );
+  assert.ok(
+    /const SHORTS_CANDIDATE_SELECTOR = \[[\s\S]{0,700}'ytd-reel-item-renderer'/.test(script),
+    'the Shorts toggle must reach the legacy card even outside a known shelf'
   );
 });
 

@@ -65,10 +65,12 @@ async function refresh() {
 }
 
 /**
- * The hero switch: free when no password is set, password-gated when one is.
+ * The hero switch: it only appears while Protection is OFF, so it only ever
+ * turns protection ON — and enabling is deliberately free of the password.
+ * Turning protection OFF lives in Settings, where the password is asked for.
  *
- * The switch moves back on its own when the dialog is cancelled — it is drawn
- * from `state`, so a re-render is the undo.
+ * The switch moves back on its own when a write fails — it is drawn from
+ * `state`, so a re-render is the undo.
  */
 async function toggleProtection(next) {
   // No password yet means setup is unfinished, and the worker refuses every

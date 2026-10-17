@@ -74,6 +74,35 @@ test('community rules are ADDED to the built-in rules, never substituted', () =>
   // Built-in domains survive a community merge.
   assert.ok(bundle.domains.length >= ADULT_DOMAINS.length);
   assert.ok(bundle.channels.includes('@communitychannel'));
+
+  // Provenance stays beside the merged sets: the cover may offer a
+  // false-positive report only for these community values.
+  assert.deepEqual(bundle.globalKeywords, ['communityterm']);
+  assert.deepEqual(bundle.globalChannels, ['@communitychannel']);
+});
+
+test('moving a rule between the user list and the community list is a rules change', () => {
+  // The effective match is identical — the same term blocks — but whether its
+  // cover offers a report changes, so the content script's old verdicts must be
+  // re-judged rather than kept.
+  const settings = {
+    protectionEnabled: true,
+    brainBotEnabled: true,
+    brainBotMode: 'overlay',
+    blockShorts: false,
+    strictMode: false,
+    blockedDomains: [],
+    userKeywords: ['sharedterm'],
+    youtubeKeywords: [],
+    blockedChannels: [],
+  };
+  const personal = buildRuleBundle(settings, null);
+  const community = buildRuleBundle(
+    { ...settings, userKeywords: [] },
+    { keywords: [{ keyword: 'sharedterm' }], channels: [] }
+  );
+  assert.deepEqual(personal.youtube, community.youtube);
+  assert.notEqual(rulesFingerprint(settings, personal), rulesFingerprint(settings, community));
 });
 
 test('a missing community snapshot can only make the bundle smaller, never empty it', () => {

@@ -27,8 +27,9 @@ import {
   switchControl,
 } from '../ui/shared.js';
 import {
-  changeProtectionWithPassword,
+  changeSettingWithPassword,
   passwordErrorText,
+  promptForPassword,
   promptToChangePassword,
   promptToCreatePassword,
 } from '../ui/password.js';
@@ -70,7 +71,79 @@ async function refresh() {
   }
 }
 
+/**
+ * The switches whose OFF direction is password-gated.
+ *
+ * Kept beside the list the worker uses so the page and the worker cannot drift:
+ * the page asks for the password at the moment the switch is flipped, and the
+ * worker refuses the same change without it even if the dialog is bypassed.
+ */
+const GATED_TOGGLES = [
+  'protectionEnabled',
+  'brainBotEnabled',
+  'blockShorts',
+  'blockYoutubeAds',
+  'strictMode',
+  'blockIncognito',
+];
+const GATED_LISTS = ['blockedChannels', 'blockedDomains', 'youtubeKeywords', 'userKeywords'];
+
+function sameBlockedItem(before, after) {
+  if (before && after && typeof before === 'object' && typeof after === 'object') {
+    return (
+      (before.handle ?? '') === (after.handle ?? '') &&
+      (before.channelId ?? '') === (after.channelId ?? '') &&
+      (before.name ?? '') === (after.name ?? '')
+    );
+  }
+  return before === after;
+}
+
+/** Does this patch switch protection off or take a block OUT of a list? */
+function requiresPassword(next) {
+  if (!next || typeof next !== 'object' || !state?.settings) return false;
+  const settings = state.settings;
+  for (const key of GATED_TOGGLES) {
+    if (Object.prototype.hasOwnProperty.call(next, key) && settings[key] === true && next[key] === false) {
+      return true;
+    }
+  }
+  for (const key of GATED_LISTS) {
+    if (!Object.prototype.hasOwnProperty.call(next, key)) continue;
+    const before = Array.isArray(settings[key]) ? settings[key] : [];
+    const after = next[key];
+    if (!Array.isArray(after)) return before.length > 0;
+    if (before.some((item) => !after.some((candidate) => sameBlockedItem(item, candidate)))) return true;
+  }
+  return false;
+}
+
+/**
+ * Apply a settings patch. The weakening direction asks for the password first;
+ * enabling a toggle and adding a keyword do not, by design.
+ */
 async function patch(next, statusNode) {
+  if (requiresPassword(next)) {
+    const result = await changeSettingWithPassword({
+      patch: next,
+      title: 'Confirm this change',
+      message: 'Enter your password to turn a protection off or remove a blocked item.',
+    });
+    if (result.cancelled) {
+      render();
+      return false;
+    }
+    if (result.error) {
+      if (statusNode) statusLine(statusNode, passwordErrorText(result.error), true);
+      else notify(passwordErrorText(result.error));
+      render();
+      return false;
+    }
+    state = result.state;
+    render();
+    return true;
+  }
+
   try {
     state = await send('settings/update', { patch: next });
     render();
@@ -82,24 +155,9 @@ async function patch(next, statusNode) {
   }
 }
 
-/** The Protection switch: free with no password, gated by the worker when one is set. */
+/** The Protection switch: enabling is free; turning it off asks for the password. */
 async function toggleProtection(next) {
-  if (!state.passwordSet) {
-    await patch({ protectionEnabled: next });
-    return;
-  }
-  const result = await changeProtectionWithPassword(next);
-  if (result.cancelled) {
-    render();
-    return;
-  }
-  if (result.error) {
-    notify(passwordErrorText(result.error));
-    render();
-    return;
-  }
-  state = result.state;
-  render();
+  await patch({ protectionEnabled: next });
 }
 
 // ── Mandatory setup ──────────────────────────────────────────────────────
@@ -172,7 +230,7 @@ function renderSetupGate() {
       el('h2', { class: 'setup-gate__title', id: 'setup-title', text: 'Protect ClearView' }),
       el('p', {
         class: 'setup-gate__text',
-        text: 'Choose the password that unlocks Protection. It is required — ClearView cannot be turned off or reconfigured without it.',
+        text: 'Choose the password that unlocks Protection. It is required — protection cannot be turned off, or a block removed, without it.',
       }),
       el('div', { class: 'setup-gate__fields' }, [password, confirm]),
       el('button', { class: 'btn primary setup-gate__submit', type: 'button', text: 'Create password', onclick: submit }),
@@ -308,7 +366,7 @@ function render() {
     'Security',
     'A local lock for the Protection switch on this browser profile.'
   );
-  security.body.append(passwordCard());
+  security.body.append(incognitoCard(protectionOn), passwordCard());
   content.append(security.node);
 
   const advanced = settingsGroup('advanced', 'Advanced', 'Server, identity and privacy details.');
@@ -455,6 +513,43 @@ function adsCard(protectionOn) {
 }
 
 /**
+ * Blocking private windows.
+ *
+ * The one bypass every other control shares: whatever is blocked, a private
+ * window is a fresh profile with no extension rules unless ClearView is there
+ * to close it. Chrome's own "Allow in incognito" switch is separate and cannot
+ * be changed by an extension, so the card says plainly whether it is on rather
+ * than promising a close that Chrome will refuse.
+ */
+function incognitoCard(protectionOn) {
+  const allowed = Boolean(state.incognitoAllowed);
+  return card({
+    icon: icon('eye-off', 21),
+    title: 'Block incognito mode',
+    subtitle: state.settings.blockIncognito
+      ? allowed
+        ? 'Private windows are closed as they open.'
+        : 'On — but Chrome has not allowed ClearView in private windows.'
+      : 'Private windows are allowed.',
+    variant: state.settings.blockIncognito ? 'alert' : '',
+    dim: !protectionOn,
+    info: true,
+    open: false,
+    trailing: switchControl(state.settings.blockIncognito, (value) => patch({ blockIncognito: value }), {
+      disabled: !protectionOn,
+      label: 'Block incognito mode',
+    }),
+    detail: [
+      'When on, ClearView closes a private window as it opens, so a block cannot be walked around by switching to incognito.',
+      allowed
+        ? 'Chrome has allowed ClearView in private windows, so this switch can act.'
+        : 'Chrome has NOT allowed ClearView in private windows. Turn on “Allow in incognito” for ClearView in chrome://extensions → Details; until then Chrome gives no extension access to private windows and this switch cannot act.',
+      'This is an extension control, not a system policy: someone who can disable ClearView can still use a private window.',
+    ],
+  }).card;
+}
+
+/**
  * The Protection password.
  *
  * Three states, one card: not set (offer to set it), set (change or remove), and
@@ -513,10 +608,11 @@ function passwordCard() {
     icon: icon(isSet ? 'lock' : 'unlock', 21),
     title: 'Protection password',
     subtitle: isSet
-      ? `Required to change Protection${state.passwordAt ? ` · set ${relativeTime(state.passwordAt)}` : ''}`
-      : 'Not set — Protection can be changed with one click.',
+      ? `Required to turn protection off or remove a block${state.passwordAt ? ` · set ${relativeTime(state.passwordAt)}` : ''}`
+      : 'Not set — protection can be turned off with one click.',
     detail: [
-      'The password is asked for whenever Protection is turned on or off from any screen.',
+      'The password is asked for when a protection is turned OFF, or when a blocked channel, website or keyword is removed — from any screen.',
+      'Turning a protection on and adding a new block do not ask: the lock guards the weakening direction, not the safe one.',
       'It is stored as a one-way hash on this device only — never synced, and never sent anywhere.',
       'This is a device lock for a shared machine, not an account: it cannot hide anything from someone with full access to this browser profile.',
     ],
@@ -735,16 +831,29 @@ function blockedChannelRow(channel, protectionOn, onChanged = null) {
         text: 'Remove',
         'aria-label': `Unblock ${label}`,
         onclick: async () => {
-          try {
-            state = await send('channel/unblock', { label });
-            // The page behind is always redrawn (its preview and counts changed);
-            // a searchable list additionally refreshes its own rows in place.
-            render();
-            if (onChanged) onChanged();
-            notify(`Unblocked ${label}.`);
-          } catch (error) {
-            statusLine(rowStatus, errorMessage(error), true);
+          // Unblocking is a removal, so it is the password-gated direction. The
+          // worker checks the password too; this dialog only collects it.
+          let message = 'Enter your password to unblock this channel.';
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            const password = await promptForPassword({ title: 'Unblock channel', message });
+            if (password === null) return;
+            try {
+              state = await send('channel/unblock', { label, password });
+              // The page behind is always redrawn (its preview and counts changed);
+              // a searchable list additionally refreshes its own rows in place.
+              render();
+              if (onChanged) onChanged();
+              notify(`Unblocked ${label}.`);
+              return;
+            } catch (error) {
+              if (error?.code !== 'invalid_password') {
+                statusLine(rowStatus, errorMessage(error), true);
+                return;
+              }
+              message = 'That was not the right password. Try again.';
+            }
           }
+          statusLine(rowStatus, 'Too many incorrect attempts.', true);
         },
       }),
     ]),

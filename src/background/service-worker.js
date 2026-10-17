@@ -24,6 +24,7 @@ import {
   channelLabel,
   channelRecord,
   normalizeBlockedChannels,
+  normalizeHandle,
   removeBlockedChannel,
 } from '../common/channels.js';
 import {
@@ -85,6 +86,80 @@ async function bootstrap() {
   });
 }
 
+/**
+ * Is Chrome letting this extension run in private windows?
+ *
+ * Chrome's own "Allow in incognito" switch is separate from ours and cannot be
+ * changed by an extension. The options page shows the answer, because a
+ * Block-incognito toggle that Chrome silently refuses to honour would be a
+ * promise the extension cannot keep.
+ */
+function isAllowedIncognitoAccess() {
+  return new Promise((resolve) => {
+    try {
+      const api = chrome.extension?.isAllowedIncognitoAccess;
+      if (typeof api !== 'function') return resolve(false);
+      const maybe = api.call(chrome.extension, (allowed) => resolve(Boolean(allowed)));
+      if (maybe && typeof maybe.then === 'function') {
+        maybe.then((allowed) => resolve(Boolean(allowed)), () => resolve(false));
+      }
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+/**
+ * Close the private windows that are open right now.
+ *
+ * Called when the toggle is turned ON and on every state application, so an
+ * incognito window opened before the setting was enabled does not survive it.
+ * The calls are best-effort: without Chrome's incognito permission there is
+ * nothing to see and nothing to close, and a refused close must not break boot.
+ */
+async function closeOpenIncognitoTabs() {
+  try {
+    if (typeof chrome.tabs?.query !== 'function' || typeof chrome.tabs?.remove !== 'function') return;
+    const tabs = await chrome.tabs.query({});
+    const ids = (Array.isArray(tabs) ? tabs : [])
+      .filter((tab) => tab?.incognito && typeof tab.id === 'number')
+      .map((tab) => tab.id);
+    // One at a time: a tab that closed between the query and the remove must not
+    // make the whole batch fail and leave the rest of the private window open.
+    for (const id of ids) {
+      try {
+        await chrome.tabs.remove(id);
+      } catch {
+        /* that one is already gone */
+      }
+    }
+  } catch {
+    /* not allowed in incognito, or the query failed */
+  }
+}
+
+/** Close one freshly-created private tab, if the toggle is on. */
+async function blockCreatedIncognitoTab(tab) {
+  if (!tab?.incognito || typeof tab.id !== 'number') return;
+  try {
+    const state = await ensureState();
+    if (!state.settings?.blockIncognito) return;
+    await chrome.tabs.remove(tab.id);
+  } catch {
+    /* the tab was already gone, or Chrome does not allow the access */
+  }
+}
+
+// TOP LEVEL and synchronous, for the same reason as the blocker: an MV3 worker
+// is woken by the event, and a listener registered after an await is too late.
+// This is the "must not open" half of the toggle — a private window is closed
+// as it is created, rather than being allowed to load a page first.
+if (chrome.tabs?.onCreated) {
+  chrome.tabs.onCreated.addListener((tab) => {
+    void blockCreatedIncognitoTab(tab);
+  });
+}
+
 /** Refresh our view of the world and (re-)install the host and ad rules. */
 async function applyState() {
   const state = await refreshState();
@@ -93,6 +168,7 @@ async function applyState() {
   // is blocked at all, so the ad ruleset follows `blockYoutubeAds` only while
   // Protection is on.
   await installAdRules(Boolean(state.settings?.protectionEnabled && state.settings?.blockYoutubeAds));
+  if (state.settings?.blockIncognito) await closeOpenIncognitoTabs();
   return state;
 }
 
@@ -308,14 +384,16 @@ void bootstrap();
 
 async function describeState() {
   const state = await ensureState();
-  const [stats, anonymousId, global, protectedByPassword, onboarded, passwordRecord] = await Promise.all([
-    getStats(),
-    getAnonymousId(),
-    getGlobalRules(),
-    hasPassword(),
-    isOnboarded(),
-    getPasswordRecord(),
-  ]);
+  const [stats, anonymousId, global, protectedByPassword, onboarded, passwordRecord, incognitoAllowed] =
+    await Promise.all([
+      getStats(),
+      getAnonymousId(),
+      getGlobalRules(),
+      hasPassword(),
+      isOnboarded(),
+      getPasswordRecord(),
+      isAllowedIncognitoAccess(),
+    ]);
   return {
     settings: state.settings,
     // Whether a Protection password is set on THIS device, and whether the
@@ -324,6 +402,9 @@ async function describeState() {
     passwordSet: protectedByPassword,
     passwordAt: passwordRecord?.at ?? null,
     onboarded,
+    // Chrome's answer, not ours: the options page can explain that "block"
+    // cannot act until ClearView is allowed in private windows.
+    incognitoAllowed,
     bundleCounts: {
       builtIn: state.bundle.builtIn.length,
       domains: state.bundle.domains.length,
@@ -449,17 +530,76 @@ async function adminCall(path, { method = 'GET', body, retry = true } = {}) {
 
 // ── Message router ───────────────────────────────────────────────────────
 
+/**
+ * The switches that weaken protection when they go from on to off.
+ *
+ * Enabling any of them is free — the password exists to stop protection being
+ * turned off in one click, not to make turning it on slower.
+ */
+const PASSWORD_GATED_TOGGLES = [
+  'protectionEnabled',
+  'brainBotEnabled',
+  'blockShorts',
+  'blockYoutubeAds',
+  'strictMode',
+  'blockIncognito',
+];
+
+/** Lists whose items are blocks: taking one OUT is gated, adding one is not. */
+const PASSWORD_GATED_LISTS = ['blockedChannels', 'blockedDomains', 'youtubeKeywords', 'userKeywords'];
+
+/** Whether two entries in a gated list are the same block. */
+function sameBlockedItem(before, after) {
+  if (before && after && typeof before === 'object' && typeof after === 'object') {
+    return (
+      (before.handle ?? '') === (after.handle ?? '') &&
+      (before.channelId ?? '') === (after.channelId ?? '') &&
+      (before.name ?? '') === (after.name ?? '')
+    );
+  }
+  return before === after;
+}
+
+/**
+ * Does this patch remove a block or switch a protection off?
+ *
+ * The check is on the EFFECT, not on which screen sent it: a list is gated only
+ * when an item present before is gone, so adding a keyword or a channel — and
+ * re-rendering the list unchanged — stays free. Toggles are gated only on
+ * true → false, so turning them ON needs no password.
+ */
+function requiresPasswordForPatch(patch, settings) {
+  if (!patch || typeof patch !== 'object') return false;
+
+  for (const key of PASSWORD_GATED_TOGGLES) {
+    if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
+    if (settings?.[key] === true && patch[key] === false) return true;
+  }
+
+  for (const key of PASSWORD_GATED_LISTS) {
+    if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
+    const before = Array.isArray(settings?.[key]) ? settings[key] : [];
+    const after = patch[key];
+    // A list replaced by something that is not a list is a removal by another
+    // name; the settings merge would otherwise let that skip the gate.
+    if (!Array.isArray(after)) return before.length > 0;
+    if (before.some((item) => !after.some((next) => sameBlockedItem(item, next)))) return true;
+  }
+
+  return false;
+}
+
 const handlers = {
   'state/get': async () => describeState(),
 
   /**
    * Apply a settings patch.
    *
-   * Changing PROTECTION is gated here, not in the pages. The switch could be
-   * flipped by a message from any page (or the console), and a lock that only
-   * exists in the UI is a lock that is not there — so the check is in the one
-   * place every change passes through. Anything that is not a Protection change
-   * is free, as before.
+   * The WEAKENING direction is gated here, not in the pages: turning any switch
+   * off, or taking an item out of a block list. The switch could be flipped by a
+   * message from any page (or the console), and a lock that only exists in the
+   * UI is a lock that is not there — so the check is in the one place every
+   * change passes through. Enabling a switch and adding a block are free.
    */
   'settings/update': async (message) => {
     const patch = message.patch ?? {};
@@ -470,9 +610,16 @@ const handlers = {
     if (!(await hasPassword())) {
       throw new ApiError('password_required', 403, 'Set a Protection password to finish setup.');
     }
-    if (Object.prototype.hasOwnProperty.call(patch, 'protectionEnabled')) {
+    const current = (await ensureState()).settings;
+    if (requiresPasswordForPatch(patch, current)) {
       const ok = await verifyPasswordGuarded(message.password ?? '');
-      if (!ok) throw new ApiError('invalid_password', 403, 'Enter your password to change Protection.');
+      if (!ok) {
+        throw new ApiError(
+          'invalid_password',
+          403,
+          'Enter your password to turn a protection off or remove a blocked item.'
+        );
+      }
     }
     await updateSettings(patch);
     await applyState();
@@ -565,8 +712,13 @@ const handlers = {
       ],
       state
     );
-    if (blocked.length === 0) return { blocked: false, matchedItem: null, via: null };
-    return { blocked: true, matchedItem: blocked[0].matchedItem, via: blocked[0].via };
+    if (blocked.length === 0) return { blocked: false, matchedItem: null, via: null, reportable: false };
+    return {
+      blocked: true,
+      matchedItem: blocked[0].matchedItem,
+      via: blocked[0].via,
+      reportable: blocked[0].reportable === true,
+    };
   },
 
   'submission/create': async (message) => {
@@ -631,6 +783,11 @@ const handlers = {
   },
 
   'channel/unblock': async (message) => {
+    // Removing a block is the direction that weakens protection, so it is the
+    // direction the password guards. Blocking a channel stays free.
+    if (!(await verifyPasswordGuarded(message.password ?? ''))) {
+      throw new ApiError('invalid_password', 403, 'Enter your password to unblock a channel.');
+    }
     const settings = (await ensureState()).settings;
     await updateSettings({ blockedChannels: removeBlockedChannel(settings.blockedChannels, message.label) });
     await applyState();
@@ -657,10 +814,15 @@ const handlers = {
       channelId: message.channelId ?? null,
     });
     const matched = isChannelBlocked(state.bundle, identity);
-    if (!matched) return { blocked: false, matchedItem: null };
+    if (!matched) return { blocked: false, matchedItem: null, reportable: false };
 
+    // A channel page itself has no report UI, but the same verdict is carried
+    // to any surface that shows one; keep the provenance consistent with a
+    // feed card's match.
+    const handle = normalizeHandle(matched);
+    const reportable = Boolean(handle && state.bundle.globalChannels?.includes(handle));
     const applied = await blockTab(sender?.tab?.id, 'channel');
-    return { blocked: true, matchedItem: matched, applied };
+    return { blocked: true, matchedItem: matched, applied, reportable };
   },
 
   'submissions/list': async () => {

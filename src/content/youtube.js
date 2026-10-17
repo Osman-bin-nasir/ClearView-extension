@@ -101,6 +101,16 @@
     'ytd-compact-video-renderer',
     'ytd-rich-grid-media',
     'ytd-channel-renderer',
+    // The legacy Shorts SHELF card. YouTube still serves this shape on home and
+    // subscriptions: a `ytd-reel-item-renderer` inside `ytd-reel-shelf-renderer`,
+    // carrying its own thumbnail link and title rather than a
+    // `ytm-shorts-lockup-view-model`. Leaving it out meant the card was never
+    // judged at all: a blocked channel's Short stayed visible there after a
+    // scroll, and clicking it only reached the (correctly blocked) player.
+    'ytd-reel-item-renderer',
+    // A Short mixed into the slim rich grid, the same way `ytd-rich-grid-media`
+    // is a long video there.
+    'ytd-rich-grid-slim-media',
     // One Short in the reels player. It is a card in every way that matters:
     // it has a title, a channel and a ⋮, and Brain Bot has to be able to cover
     // or remove it exactly like a long video's card.
@@ -218,6 +228,15 @@
    */
   const handled = new WeakMap();
 
+  /**
+   * Shorts this script paused, so only those may be resumed by it.
+   *
+   * A covered Short is paused; when the player recycles the same reel for the
+   * next Short and that one is clean, the pause has to be undone — but a video
+   * the user paused themselves must stay paused.
+   */
+  const pausedByClearView = new WeakSet();
+
   let scanTimer = null;
   let menuOpenedAt = 0;
   /**
@@ -230,6 +249,8 @@
   let menuCard = null;
   /** The last page whose channel was sent to the worker, so it is sent once. */
   let lastCheckedPageUrl = null;
+  /** The Shorts URL the current decisions were made for. */
+  let shownShortHref = location.href;
 
   // ── Messaging ──────────────────────────────────────────────────────────
 
@@ -286,6 +307,10 @@
     'ytd-video-renderer',
     'ytd-grid-video-renderer',
     'ytd-compact-video-renderer',
+    // The legacy shelf's own card shape, so the Shorts toggle reaches it even
+    // when it is not inside a shelf this list already knows.
+    'ytd-reel-item-renderer',
+    'ytd-rich-grid-slim-media',
     // The Shorts tab on a channel page.
     'yt-tab-shape',
   ].join(',');
@@ -917,6 +942,24 @@
     handled.delete(element);
   }
 
+  /**
+   * Record a clean verdict, and release a Short that WE paused if it is clean.
+   *
+   * The release deliberately does not happen in `restoreCard` itself: the
+   * swipe path clears the old cover before the new Short has been judged, and
+   * resuming there would play a blocked Short for a moment. Only a confirmed
+   * clean verdict resumes.
+   */
+  function markCardClean(element) {
+    restoreCard(element);
+    handled.set(element, {
+      mode: 'clean',
+      revision: config.revision,
+      identity: cardIdentity(element),
+    });
+    if (element.localName === 'ytd-reel-video-renderer') resumeShortIfWePaused(element);
+  }
+
   /** Forget every decision and restore the original cards. */
   function reset() {
     // Turning protection off mid-hover must release the page-wide hover lock and
@@ -926,7 +969,11 @@
       window.clearInterval(hoverBurst);
       hoverBurst = null;
     }
-    for (const element of cardElements()) restoreCard(element);
+    for (const element of cardElements()) {
+      restoreCard(element);
+      // Turning protection off must release a Short this script paused too.
+      if (element.localName === 'ytd-reel-video-renderer') resumeShortIfWePaused(element);
+    }
   }
 
   /**
@@ -943,6 +990,18 @@
   function decidedByCurrentRules(element) {
     const record = handled.get(element);
     if (!record || record.revision !== config.revision) return false;
+    // The Shorts player REUSES one `ytd-reel-video-renderer` for every swipe:
+    // the element stays, while its title, channel and video change. The record
+    // then describes the Short before the swipe, so every later scan believed
+    // the new Short was already handled — and its overlay and pause stayed on
+    // screen. An identity mismatch is the signal that this is a different video.
+    if (
+      element.localName === 'ytd-reel-video-renderer' &&
+      record.identity &&
+      record.identity !== cardIdentity(element)
+    ) {
+      return false;
+    }
     // The record says what this script DECIDED, not what the page currently
     // shows. YouTube re-stamps and re-attaches whole feed subtrees, and that
     // takes our overlay — or the display we set to none — with it. Trusting the
@@ -1191,21 +1250,22 @@
   }
 
   /**
-   * The "this was a mistake" action, on the blocked player.
+   * The "this was a mistake" action.
    *
-   * A block the user cannot account for has to be answerable where they see it;
-   * routing them to a settings page to find a rule they do not know the name of
-   * is not. It lives on the WATCH page rather than on the feed cover: the feed is
-   * a signpost, and the page with the video is where a report can be judged. It
-   * sends the matched rule — and the video — to the existing false-positive
-   * endpoint, counted for review, never acted on automatically.
+   * Only a COMMUNITY rule can be reported: a built-in filter or a rule the user
+   * wrote themselves has no place in the community false-positive queue, and
+   * putting the action on every cover would send noise. The worker decides that
+   * provenance (`reportable`) without ever handing the rule list to the page.
+   *
+   * The action appears on both the blocked player and the feed cover, because a
+   * user can see the block — and know it is wrong — without opening the video.
    */
   function buildReportButton(verdict, context = {}) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `${OVERLAY_CLASS}__report`;
     button.textContent = 'Report false positive';
-    if (!verdict.matchedItem) {
+    if (!verdict.matchedItem || !verdict.reportable) {
       button.hidden = true;
       return button;
     }
@@ -1252,6 +1312,7 @@
           href,
           matchedItem: verdict.matchedItem ?? null,
           via: verdict.via ?? null,
+          reportable: verdict.reportable === true,
           at: Date.now(),
         })
       );
@@ -1272,19 +1333,105 @@
       const current = new URL(location.href).searchParams.get('v');
       if (!wanted || !current || wanted !== current) return null;
       if (!data.matchedItem && !data.via) return null;
-      return { blocked: true, matchedItem: data.matchedItem, via: data.via };
+      return {
+        blocked: true,
+        matchedItem: data.matchedItem,
+        via: data.via,
+        reportable: data.reportable === true,
+      };
     } catch {
       return null;
     }
+  }
+
+  /** The video a card points at, canonicalised, or null when it has no video. */
+  function cardVideoUrl(element) {
+    const link = element.querySelector(
+      'a[href^="/watch"], a[href^="/shorts/"], a[href*="youtube.com/watch"], a[href*="youtube.com/shorts/"]'
+    );
+    const href = (link?.getAttribute('href') ?? '').trim();
+    if (href === '') return null;
+    try {
+      // Resolved against YouTube explicitly: this script only runs there, and a
+      // relative card href must work even where `location.origin` is not a
+      // usable URL base (an extension page, a test document).
+      const url = new URL(href, 'https://www.youtube.com');
+      if (url.pathname === '/watch') {
+        const id = url.searchParams.get('v');
+        return id ? `${url.origin}/watch?v=${encodeURIComponent(id)}` : null;
+      }
+      const match = /^\/shorts\/([\w-]{5,})/.exec(url.pathname);
+      return match ? `${url.origin}/shorts/${match[1]}` : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** What a cover can tell the report about the video behind it. */
+  function cardReportContext(element) {
+    return {
+      videoUrl: cardVideoUrl(element),
+      title: readCardTitle(element),
+      channel: readCardChannel(element).channel || null,
+    };
+  }
+
+  /** Is this href a link into the Shorts player? */
+  function isShortsHref(href) {
+    if (typeof href !== 'string' || href.trim() === '') return false;
+    try {
+      return new URL(href, 'https://www.youtube.com').pathname.startsWith('/shorts/');
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Keep a covered Short where it is when it is clicked.
+   *
+   * A long video's cover opens the watch page, which is where its player is
+   * blocked and its description and comments stay readable. A Short has no such
+   * surface: following its link opens `/shorts/…` and starts the reel player,
+   * which is exactly what a covered card promised not to do. The click is
+   * therefore stopped inside the card — including a click on its title — while
+   * controls that have their own job (the ⋮ menu, the report button) are left
+   * alone. Attached once per card: YouTube reuses cards, not replaces them.
+   */
+  const shortClickGuards = new WeakSet();
+
+  function guardShortNavigation(element) {
+    if (shortClickGuards.has(element)) return;
+    shortClickGuards.add(element);
+    element.addEventListener(
+      'click',
+      (event) => {
+        if (!element.hasAttribute('data-cv-protected')) return;
+        const target = event.target;
+        if (
+          target?.closest?.(
+            'button, [role="button"], ytd-menu-renderer, yt-icon-button, tp-yt-paper-icon-button'
+          )
+        ) {
+          return;
+        }
+        const link = target?.closest?.('a[href]');
+        if (!link || !isShortsHref(link.getAttribute('href'))) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        event.stopPropagation();
+      },
+      true
+    );
   }
 
   /**
    * Draw the block on a card's thumbnail.
    *
    * Only the thumbnail is covered, so the title and byline stay readable. A
-   * click on the block opens the video like any other click would — the video
-   * page is where playback is stopped (`applyPlayerBlock`), which is what keeps
-   * the description and comments available.
+   * click on a long video's block opens the watch page, where playback is
+   * stopped (`applyPlayerBlock`) and the description and comments remain; a
+   * covered SHORT stays put instead, because opening it would start the reel
+   * feed. Community matches carry the report action right here.
    */
   function buildOverlay(element, verdict) {
     const { host, banner } = thumbnailHost(element);
@@ -1300,18 +1447,28 @@
     reason.className = `${OVERLAY_CLASS}__reason`;
     reason.textContent = reasonText(verdict);
 
-    // The FEED cover is a signpost, not a form: it names the block and opens the
-    // video. Reporting belongs where the video itself is — on the watch page,
-    // over the player — so the feed stays one clear sentence with one action.
+    // The cover names the block, and — for a community rule only — offers the
+    // false-positive action where the user is already looking. A personal or
+    // built-in rule gets no report here: that queue is for the shared list.
     overlay.append(label, reason);
+    if (verdict.reportable) {
+      overlay.append(buildReportButton(verdict, cardReportContext(element)));
+    }
 
     // Where the overlay is inside a link, YouTube's own navigation handles the
     // click. Where it is not (a `ytd-thumbnail` wrapper), the card's thumbnail
     // link has to be followed explicitly.
-    overlay.addEventListener('click', () => {
+    overlay.addEventListener('click', (event) => {
       const link =
         overlay.closest('a[href]') ?? element.querySelector('a#thumbnail[href], a[href^="/watch"]');
       if (!link) return;
+      // A Short has no readable watch page behind it; following the link opens
+      // the reel feed, which the cover promised not to do.
+      if (isShortsHref(link.getAttribute('href'))) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       // Tell the next page what this click already knew, so the video does not
       // get a moment of playback while the worker is asked again.
       rememberPendingBlock(link.href, verdict);
@@ -1331,14 +1488,33 @@
       try {
         video.pause();
         video.muted = true;
+        pausedByClearView.add(video);
       } catch {
         /* the element can be replaced while the player swaps Shorts */
       }
     }
   }
 
+  /** Resume a Short only when this script is the one that paused it. */
+  function resumeShortIfWePaused(reel) {
+    for (const video of reel.querySelectorAll('video')) {
+      if (!pausedByClearView.has(video)) continue;
+      pausedByClearView.delete(video);
+      try {
+        const playing = video.play();
+        if (playing && typeof playing.catch === 'function') playing.catch(() => {});
+      } catch {
+        /* autoplay refused, or the player swapped the element again */
+      }
+    }
+  }
+
   function applyProtection(element, verdict) {
     const record = handled.get(element) ?? {};
+    const identity = cardIdentity(element);
+    // A recycled reel carries the old Short's cover until it is taken off. It
+    // may also still be hidden from Remove mode, so the cleanup comes first.
+    if (record.identity && record.identity !== identity) removeOverlay(record, element);
 
     // Both a keyword match and a blocked channel follow the SAME display mode.
     // Forcing channels to be removed made the overlay appear for keywords but
@@ -1382,10 +1558,15 @@
     // another worker round-trip — the verdict is already decided.
     record.verdict = verdict;
     element.setAttribute('data-cv-protected', verdict.via ?? 'feed');
-    // Stamped with the rules it was decided under, so a later rules change makes
-    // this decision stale rather than permanent.
+    // Stamped with the rules AND the video it was decided for: a recycled Shorts
+    // reel has the same element but a different identity, which is what makes
+    // this decision stale on the next swipe.
     record.revision = config.revision;
+    record.identity = identity;
     handled.set(element, record);
+    // A covered Short must stay covered: its link is the reel player, not a
+    // readable watch page. Attached once and a no-op for long videos.
+    guardShortNavigation(element);
   }
 
   /**
@@ -1405,6 +1586,97 @@
   }
 
   /**
+   * What a card IS, not merely which element holds it.
+   *
+   * The feed rarely recycles an element, but the Shorts player always does. The
+   * video's own link is included for a reel, so two Shorts that happen to share
+   * a title and channel (a series, a re-upload) are still distinguishable.
+   */
+  function cardIdentity(element) {
+    const key = cardCacheKey(readCard(element));
+    if (element.localName !== 'ytd-reel-video-renderer') return key;
+    return `${key}\u0000/${shortVideoId(element) ?? ''}`;
+  }
+
+  /** The video id from a Short's own link, or null when this is not a Short. */
+  function shortVideoId(element) {
+    const link = element.querySelector('a[href^="/shorts/"]')?.getAttribute('href') ?? '';
+    const match = /^\/shorts\/([\w-]{5,})/.exec(link);
+    return match ? match[1] : null;
+  }
+
+  /**
+   * A Shorts shelf card prints a title and a view count — no channel at all.
+   *
+   * The channel page offers its owner in the URL, so that case costs nothing.
+   * The home/search shelf does not, and a blocked channel's Shorts therefore
+   * stayed visible: there was nothing for `feed/evaluate` to match. YouTube's
+   * public oEmbed endpoint answers exactly the missing question (author name
+   * and `/@handle`), and it is same-origin from the page.
+   */
+  const shortChannelCache = new Map();
+  const shortChannelRequests = new Map();
+  const SHORT_CHANNEL_CACHE_LIMIT = 1000;
+  let channelPageIdentityHref = null;
+  let channelPageIdentity = null;
+
+  function channelPageShortIdentity() {
+    if (!isChannelPagePath(location.pathname)) return null;
+    if (channelPageIdentityHref !== location.href) {
+      channelPageIdentityHref = location.href;
+      channelPageIdentity = pageChannelTarget();
+    }
+    return channelPageIdentity;
+  }
+
+  async function fetchShortChannel(videoId) {
+    if (shortChannelRequests.has(videoId)) return shortChannelRequests.get(videoId);
+
+    const request = (async () => {
+      try {
+        const endpoint =
+          `${location.origin}/oembed?url=` +
+          encodeURIComponent(`${location.origin}/shorts/${videoId}`) +
+          '&format=json';
+        const response = await fetch(endpoint, { credentials: 'omit' });
+        if (!response.ok) return null;
+        const data = await response.json();
+        const rawUrl = typeof data.author_url === 'string' ? data.author_url : '';
+        let channelUrl = '';
+        try {
+          channelUrl = rawUrl === '' ? '' : new URL(rawUrl, location.origin).pathname;
+        } catch {
+          channelUrl = '';
+        }
+        const name = typeof data.author_name === 'string' ? data.author_name.trim() : '';
+        return channelUrl || name ? { url: channelUrl || null, name: name || null } : null;
+      } catch {
+        // Offline, blocked by the page, or the video is gone: leave the card
+        // unjudged rather than inventing a channel.
+        return null;
+      }
+    })().then((target) => {
+      if (shortChannelCache.size >= SHORT_CHANNEL_CACHE_LIMIT) shortChannelCache.clear();
+      shortChannelCache.set(videoId, target);
+      shortChannelRequests.delete(videoId);
+      return target;
+    });
+
+    shortChannelRequests.set(videoId, request);
+    return request;
+  }
+
+  /** The channel a Shorts card belongs to, from the page or from oEmbed. */
+  async function resolveShortChannel(element) {
+    const pageIdentity = channelPageShortIdentity();
+    if (pageIdentity) return pageIdentity;
+    const videoId = shortVideoId(element);
+    if (!videoId) return null;
+    if (shortChannelCache.has(videoId)) return shortChannelCache.get(videoId);
+    return fetchShortChannel(videoId);
+  }
+
+  /**
    * Is this card close enough to the viewport to be worth judging?
    *
    * The feed can hold hundreds of cards; evaluating all of them on every pass is
@@ -1420,6 +1692,43 @@
     return rect.bottom >= -margin && rect.top <= height + margin;
   }
 
+  /**
+   * Is there still a judgeable card near the viewport that has no decision?
+   *
+   * Remove mode collapses each card it blocks, which pulls the next row of the
+   * grid up into the viewport. YouTube's own grid then shows Shorts that were far
+   * off screen a moment ago — and, crucially, hiding an element is a STYLE change,
+   * not a child addition, so the MutationObserver never sees it and nothing asks
+   * the new row to be judged. A blocked channel's Shorts therefore stayed on a
+   * channel page (visible, but its player was blocked when clicked) until the
+   * user scrolled. This test lets the scan chain one more pass after a removal
+   * until the visible grid is settled.
+   *
+   * A card with no title yet is left out: it is neither blockable nor safely
+   * markable as clean, and counting it would spin the chain forever.
+   */
+  function hasUndecidedCardNearViewport() {
+    for (const element of cardElements()) {
+      if (decidedByCurrentRules(element)) continue;
+      if (!nearViewport(element)) continue;
+      if (readCard(element).title === '') continue;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Run one more pass when Remove mode has just collapsed the grid.
+   *
+   * The page will not tell us: style changes do not fire the child-list observer, and
+   * no scroll happened, yet newly visible cards need a verdict. Scroll, mutations
+   * and this chain all end at the same debounced pass, so nothing is judged twice.
+   */
+  function followUpAfterRemoval(applied) {
+    if (applied === 0 || config.brainBotMode !== 'remove') return;
+    if (hasUndecidedCardNearViewport()) scheduleScan();
+  }
+
   /** Judge a card from the cache, if it has one. Returns true when it did. */
   function applyCachedVerdict(element, card) {
     const cached = verdictCache.get(cardCacheKey(card));
@@ -1427,8 +1736,7 @@
     if (cached.verdict) {
       applyProtection(element, cached.verdict);
     } else if (card.title !== '') {
-      restoreCard(element);
-      handled.set(element, { mode: 'clean', revision: config.revision });
+      markCardClean(element);
     } else {
       return false;
     }
@@ -1460,19 +1768,49 @@
     }
 
     const elements = cardElements();
-    const pending = [];
-    const payload = [];
+    const candidates = [];
     for (const element of elements) {
       if (decidedByCurrentRules(element)) continue;
       // Only cards near the viewport are judged: the rest are left undecided and
       // picked up by the scroll pass (see `nearViewport`).
       if (!nearViewport(element)) continue;
-      const card = readCard(element);
-      if (applyCachedVerdict(element, card)) continue;
+      candidates.push({ element, card: readCard(element) });
+    }
+
+    // A Shorts shelf card has no channel in its markup, so resolve it before
+    // the worker sees the card — otherwise a channel block cannot match it and
+    // Remove mode leaves the Short in the shelf (where clicking it only lands
+    // on the blocked player). The channel page costs no request; the home and
+    // search shelves use YouTube's own oEmbed endpoint, cached per video. The
+    // requests run together: they are independent, and one slow video must not
+    // hold up every other card on the shelf.
+    if (channelRules) {
+      await Promise.all(
+        candidates.map(async ({ element, card }) => {
+          if (card.channelUrl !== null || card.channel !== '') return;
+          const target = await resolveShortChannel(element);
+          if (!target) return;
+          card.channelUrl = target.url;
+          card.channel = target.name;
+        })
+      );
+    }
+
+    const pending = [];
+    const payload = [];
+    let applied = 0;
+    for (const { element, card } of candidates) {
+      if (applyCachedVerdict(element, card)) {
+        applied += 1;
+        continue;
+      }
       pending.push(element);
       payload.push(card);
     }
-    if (pending.length === 0) return;
+    if (pending.length === 0) {
+      followUpAfterRemoval(applied);
+      return;
+    }
 
     // Judge in bounded batches so a huge home feed cannot produce one request
     // the worker has to cap.
@@ -1488,6 +1826,7 @@
         if (verdict) {
           applyProtection(element, verdict);
           rememberVerdict(card, verdict);
+          applied += 1;
         } else if (card.title !== '') {
           // A card with a channel link but no title yet is still worth marking
           // only once the title is known, so a lazy title is never missed.
@@ -1496,13 +1835,14 @@
           // verdict that produced it may be gone, and a card left hidden (or
           // left covered) by a decision that no longer applies is the same bug
           // in the other direction.
-          restoreCard(element);
-          handled.set(element, { mode: 'clean', revision: config.revision });
+          markCardClean(element);
           rememberVerdict(card, null);
+          applied += 1;
         }
         // else: no title yet — left unhandled for the next pass.
       });
     }
+    followUpAfterRemoval(applied);
   }
 
   // ── The video's own ⋮ menu ─────────────────────────────────────────────
@@ -2012,18 +2352,22 @@
     // Only redraw the content when the verdict changed. This function runs on
     // every debounced mutation pass, and rewriting the panel each time would
     // add DOM, fire the observer, and re-enter the same pass forever.
-    const stamp = `${verdict.via ?? ''}|${verdict.matchedItem ?? ''}`;
+    const stamp = `${verdict.via ?? ''}|${verdict.matchedItem ?? ''}|${verdict.reportable ? '1' : '0'}`;
     if (overlay.dataset.cvStamp !== stamp) {
       overlay.dataset.cvStamp = stamp;
       overlay.querySelector(`.${PLAYER_BLOCK_CLASS}__reason`).textContent = reasonText(verdict);
-      const report = buildReportButton(verdict, {
-        videoUrl: currentVideoUrl(),
-        title: readWatchTitle(),
-        channel: watchChannelIdentity()?.name ?? null,
-      });
-      report.classList.add(`${PLAYER_BLOCK_CLASS}__report`);
       overlay.querySelector(`.${PLAYER_BLOCK_CLASS}__report`)?.remove();
-      overlay.append(report);
+      // Community rules only: a personal block or a built-in filter is not
+      // reportable through the shared false-positive queue.
+      if (verdict.reportable) {
+        const report = buildReportButton(verdict, {
+          videoUrl: currentVideoUrl(),
+          title: readWatchTitle(),
+          channel: watchChannelIdentity()?.name ?? null,
+        });
+        report.classList.add(`${PLAYER_BLOCK_CLASS}__report`);
+        overlay.append(report);
+      }
     }
 
     const video = player.querySelector('video');
@@ -2186,7 +2530,29 @@
 
   // ── Mutation-driven refresh ────────────────────────────────────────────
 
+  /**
+   * Drop the previous Short's decision the moment the player moves to another.
+   *
+   * The debounced scan would eventually see the new title, but until it does the
+   * old cover is still over the player and `data-cv-protected` still pauses it —
+   * which is exactly what a swipe looked like: the next Short was covered and
+   * refused to play. This runs synchronously on the mutation/URL change, before
+   * the scan is scheduled.
+   */
+  function releaseStaleShorts() {
+    if (!location.pathname.startsWith('/shorts')) {
+      shownShortHref = location.href;
+      return;
+    }
+    if (shownShortHref === location.href) return;
+    shownShortHref = location.href;
+    for (const reel of document.querySelectorAll('ytd-reel-video-renderer')) restoreCard(reel);
+  }
+
   function scheduleScan() {
+    // Not debounced: a swipe must release the old pause before the next Short
+    // can try to play. The scan below is what re-judges it.
+    releaseStaleShorts();
     if (scanTimer !== null) return;
     scanTimer = window.setTimeout(() => {
       scanTimer = null;
@@ -2365,6 +2731,7 @@
       checkedVideoKey = null;
       videoVerdict = null;
       clearPlayerBlock();
+      releaseStaleShorts();
       applyShorts();
       applyAds();
       scheduleScan();

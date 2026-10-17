@@ -38,8 +38,8 @@ export function normalizeKeywords(list) {
  * @returns {{ builtIn: string[], domains: string[], everywhere: string[], youtube: string[], channels: string[], channelIds: string[], channelNames: string[] }}
  */
 export function buildRuleBundle(settings, global) {
-  const globalKeywords = (global?.keywords ?? []).map((k) => k.keyword);
-  const globalChannels = (global?.channels ?? []).map((c) => c.handle);
+  const globalKeywordsRaw = (global?.keywords ?? []).map((k) => k.keyword);
+  const globalChannelsRaw = (global?.channels ?? []).map((c) => c.handle);
 
   // Built-in: Tier 1 always, Tier 2 only under Strict Mode. Returns a stable
   // module-level array when possible, so the matcher's identity cache is hit.
@@ -51,7 +51,7 @@ export function buildRuleBundle(settings, global) {
 
   // Keywords applied to every page and search: the user's "everywhere" list plus
   // the community rules an administrator approved.
-  const everywhere = normalizeKeywords([...(settings.userKeywords ?? []), ...globalKeywords]);
+  const everywhere = normalizeKeywords([...(settings.userKeywords ?? []), ...globalKeywordsRaw]);
 
   // Keywords applied to YouTube surfaces: the YouTube-only list, plus everything
   // that already applies everywhere.
@@ -64,11 +64,16 @@ export function buildRuleBundle(settings, global) {
   // for a block made from `/@handle` before the id was ever seen.
   const blocked = normalizeBlockedChannels(settings.blockedChannels ?? []);
 
+  // Provenance, kept beside the merged sets: a false-positive report is only
+  // offered for a COMMUNITY rule, never for a rule the user wrote themselves —
+  // and the content script must be able to tell the two apart without ever
+  // seeing either list. The values are normalized exactly like the matching
+  // sets, so a verdict's `matchedItem` can be looked up here verbatim.
+  const globalKeywords = normalizeKeywords(globalKeywordsRaw);
+  const globalChannels = [...new Set(globalChannelsRaw.map((h) => normalizeHandle(h)).filter(Boolean))];
+
   const channels = [
-    ...new Set([
-      ...blocked.map((c) => c.handle).filter(Boolean),
-      ...globalChannels.map((h) => normalizeHandle(h)).filter(Boolean),
-    ]),
+    ...new Set([...blocked.map((c) => c.handle).filter(Boolean), ...globalChannels]),
   ];
 
   const channelIds = [...new Set(blocked.map((c) => c.channelId).filter(Boolean))];
@@ -79,7 +84,17 @@ export function buildRuleBundle(settings, global) {
   // card gives — so a channel blocked by handle kept appearing in the feed.
   const channelNames = [...new Set(blocked.map((c) => normalizeChannelName(c.name)).filter(Boolean))];
 
-  return { builtIn, domains, everywhere, youtube, channels, channelIds, channelNames };
+  return {
+    builtIn,
+    domains,
+    everywhere,
+    youtube,
+    channels,
+    channelIds,
+    channelNames,
+    globalKeywords,
+    globalChannels,
+  };
 }
 
 /**
@@ -108,6 +123,11 @@ export function rulesFingerprint(settings, bundle) {
       (bundle?.channels ?? []).join('|'),
       (bundle?.channelIds ?? []).join('|'),
       (bundle?.channelNames ?? []).join('|'),
+      // Provenance is part of what a page shows: moving a rule into (or out of)
+      // the community list changes whether its cover offers a report, even when
+      // the effective match set is otherwise identical.
+      (bundle?.globalKeywords ?? []).join('|'),
+      (bundle?.globalChannels ?? []).join('|'),
     ].join('~')
   );
 }

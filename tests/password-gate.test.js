@@ -20,6 +20,7 @@ function stubChrome() {
   const local = {};
   const rulesets = { enabled: [], disabled: [] };
   const onMessage = [];
+  const tabs = { list: [], removed: [], listeners: [] };
 
   const area = (store) => ({
     async get(key) {
@@ -53,7 +54,17 @@ function stubChrome() {
       local: area(local),
       onChanged: { addListener: () => {} },
     },
-    tabs: { async sendMessage() {}, async update() {} },
+    tabs: {
+      async sendMessage() {},
+      async update() {},
+      async query() {
+        return tabs.list;
+      },
+      async remove(ids) {
+        tabs.removed.push(...[].concat(ids));
+      },
+      onCreated: { addListener: (listener) => tabs.listeners.push(listener) },
+    },
     action: { async setBadgeText() {}, async setBadgeBackgroundColor() {}, async setTitle() {} },
     // Both navigation events the blocker registers: the page load, and the
     // same-document pushState that a site's own search box produces.
@@ -76,7 +87,7 @@ function stubChrome() {
     permissions: { contains: async () => true, request: async () => true },
   };
 
-  return { sync, local, rulesets, onMessage };
+  return { sync, local, rulesets, onMessage, tabs };
 }
 
 async function loadWorker() {
@@ -101,6 +112,9 @@ function callWorker(stub, message) {
 }
 
 const SETTINGS_KEY = 'cv.settings';
+
+/** Let a fire-and-forget listener (the incognito tab close) finish. */
+const settleWorker = () => new Promise((resolve) => setTimeout(resolve, 25));
 
 // ── The ad ruleset ───────────────────────────────────────────────────────
 
@@ -138,7 +152,17 @@ test('the ad switch alone controls the ruleset while Protection is on', async ()
   const stub = await loadWorker();
   await callWorker(stub, { type: 'password/set', password: 'secret1' });
   stub.rulesets.disabled.length = 0;
-  await callWorker(stub, { type: 'settings/update', patch: { blockYoutubeAds: false } });
+  // Turning the ad blocker OFF weakens protection, so it carries the password
+  // like every other off switch; enabling it does not.
+  await assert.rejects(
+    () => callWorker(stub, { type: 'settings/update', patch: { blockYoutubeAds: false } }),
+    (error) => error.code === 'invalid_password'
+  );
+  await callWorker(stub, {
+    type: 'settings/update',
+    patch: { blockYoutubeAds: false },
+    password: 'secret1',
+  });
   assert.deepEqual(stub.rulesets.disabled, ['youtube_ads']);
 });
 
@@ -166,8 +190,8 @@ test('a fresh install must finish setup before anything can change', async () =>
   // Setup itself is allowed, and unlocks the page.
   const after = await callWorker(stub, { type: 'password/set', password: 'secret1' });
   assert.equal(after.passwordSet, true);
-  await callWorker(stub, { type: 'settings/update', patch: { blockYoutubeAds: false } });
-  assert.equal(stub.sync[SETTINGS_KEY].blockYoutubeAds, false);
+  await callWorker(stub, { type: 'settings/update', patch: { blockShorts: true } });
+  assert.equal(stub.sync[SETTINGS_KEY].blockShorts, true);
 });
 
 test('once a password is set, changing Protection is refused without it', async () => {
@@ -194,27 +218,107 @@ test('once a password is set, changing Protection is refused without it', async 
   assert.equal(state.settings.protectionEnabled, false);
   assert.equal(stub.sync[SETTINGS_KEY].protectionEnabled, false);
 
-  // The gate is on the SWITCH, not on one direction: turning it back ON is
-  // gated exactly the same way.
-  await assert.rejects(
-    () => callWorker(stub, { type: 'settings/update', patch: { protectionEnabled: true } }),
-    (error) => error.code === 'invalid_password'
-  );
+  // Turning it back ON is the safe direction, so it is free — a password that
+  // punished enabling would be a lock that makes the product harder to use.
   const reEnabled = await callWorker(stub, {
     type: 'settings/update',
     patch: { protectionEnabled: true },
-    password: 'secret1',
   });
-  assert.equal(reEnabled.settings.protectionEnabled, true, 'enabling needs the password too');
+  assert.equal(reEnabled.settings.protectionEnabled, true, 'enabling needs no password');
 });
 
-test('every other setting stays free while a password is set', async () => {
-  // The password guards PROTECTION. Making it guard the keyword list too would
-  // be a change nobody asked for and would make the lock feel like a cage.
+test('every off switch is gated, while every on switch is free', async () => {
+  // The user asked for one rule across the page: the password is needed to
+  // DISABLE a toggle, never to enable it.
   const stub = await loadWorker();
   await callWorker(stub, { type: 'password/set', password: 'secret1' });
-  await callWorker(stub, { type: 'settings/update', patch: { blockShorts: true } });
-  assert.equal(stub.sync[SETTINGS_KEY].blockShorts, true);
+
+  for (const key of ['blockShorts', 'brainBotEnabled', 'blockYoutubeAds', 'strictMode', 'blockIncognito']) {
+    await callWorker(stub, { type: 'settings/update', patch: { [key]: true } });
+    assert.equal(stub.sync[SETTINGS_KEY][key], true, `${key} turns on without a password`);
+    await assert.rejects(
+      () => callWorker(stub, { type: 'settings/update', patch: { [key]: false } }),
+      (error) => error.code === 'invalid_password',
+      `${key} must refuse to turn off without one`
+    );
+    await callWorker(stub, {
+      type: 'settings/update',
+      patch: { [key]: false },
+      password: 'secret1',
+    });
+    assert.equal(stub.sync[SETTINGS_KEY][key], false, `${key} turns off with the password`);
+  }
+});
+
+test('block incognito closes existing and newly-created private tabs', async () => {
+  const stub = await loadWorker();
+  await callWorker(stub, { type: 'password/set', password: 'secret1' });
+
+  // A private window that was already open when the switch was turned on.
+  stub.tabs.list.push({ id: 9, incognito: true });
+  await callWorker(stub, { type: 'settings/update', patch: { blockIncognito: true } });
+  assert.deepEqual(stub.tabs.removed, [9], 'an already-open private tab must be closed');
+
+  // ...and a window opened while it is on is closed as it appears.
+  assert.equal(stub.tabs.listeners.length, 1, 'the worker must listen for new tabs');
+  stub.tabs.listeners[0]({ id: 10, incognito: true });
+  await settleWorker();
+  assert.ok(stub.tabs.removed.includes(10), 'a new private tab must be closed before it loads');
+
+  // Other windows are left alone.
+  stub.tabs.listeners[0]({ id: 11, incognito: false });
+  await settleWorker();
+  assert.ok(!stub.tabs.removed.includes(11), 'a normal window is never touched');
+
+  // Turning the switch off weakens protection, so it asks for the password.
+  await assert.rejects(
+    () => callWorker(stub, { type: 'settings/update', patch: { blockIncognito: false } }),
+    (error) => error.code === 'invalid_password'
+  );
+  await callWorker(stub, {
+    type: 'settings/update',
+    patch: { blockIncognito: false },
+    password: 'secret1',
+  });
+  assert.equal(stub.sync[SETTINGS_KEY].blockIncognito, false);
+});
+
+test('adding a blocked item is free, removing one needs the password', async () => {
+  const stub = await loadWorker();
+  await callWorker(stub, { type: 'password/set', password: 'secret1' });
+
+  await callWorker(stub, { type: 'settings/update', patch: { youtubeKeywords: ['a term'] } });
+  assert.deepEqual(stub.sync[SETTINGS_KEY].youtubeKeywords, ['a term']);
+  await assert.rejects(
+    () => callWorker(stub, { type: 'settings/update', patch: { youtubeKeywords: [] } }),
+    (error) => error.code === 'invalid_password'
+  );
+
+  const channel = { handle: '@someone', name: 'Someone' };
+  await callWorker(stub, { type: 'settings/update', patch: { blockedChannels: [channel] } });
+  await assert.rejects(
+    () => callWorker(stub, { type: 'settings/update', patch: { blockedChannels: [] } }),
+    (error) => error.code === 'invalid_password'
+  );
+  await callWorker(stub, {
+    type: 'settings/update',
+    patch: { blockedChannels: [] },
+    password: 'secret1',
+  });
+  assert.deepEqual(stub.sync[SETTINGS_KEY].blockedChannels, []);
+
+  // The dedicated unblock path is gated the same way.
+  await callWorker(stub, { type: 'channel/block', handle: '@someone' });
+  await assert.rejects(
+    () => callWorker(stub, { type: 'channel/unblock', label: '@someone' }),
+    (error) => error.code === 'invalid_password'
+  );
+  const after = await callWorker(stub, {
+    type: 'channel/unblock',
+    label: '@someone',
+    password: 'secret1',
+  });
+  assert.equal(after.settings.blockedChannels.length, 0);
 });
 
 test('the password can be verified, changed and removed — each with the current one', async () => {
@@ -250,10 +354,10 @@ test('the password can be verified, changed and removed — each with the curren
 test('the user can export their data and erase everything', async () => {
   const stub = await loadWorker();
   await callWorker(stub, { type: 'password/set', password: 'secret1' });
-  await callWorker(stub, { type: 'settings/update', patch: { blockYoutubeAds: false } });
+  await callWorker(stub, { type: 'settings/update', patch: { blockShorts: true } });
 
   const exported = await callWorker(stub, { type: 'data/export' });
-  assert.equal(exported.settings.blockYoutubeAds, false, 'settings travel in the export');
+  assert.equal(exported.settings.blockShorts, true, 'settings travel in the export');
   assert.ok(exported.anonymousId, 'and the anonymous id, so contributions are explainable');
   assert.ok(!('password' in exported) && !('hash' in exported), 'credentials never travel');
   assert.ok(exported.exportedAt, 'the document is dated');

@@ -13,8 +13,10 @@
  *    readable (a card-shaped fallback painted over the title);
  *  - a blocked channel and a keyword match are presented the SAME way, so a
  *    channel block is not silently turned into a removed card;
- *  - clicking a cover opens the video, and the video page blocks the PLAYER in
- *    place — paused behind a panel — while the description and comments remain.
+ *  - clicking a LONG video's cover opens the video, and the video page blocks
+ *    the PLAYER in place — paused behind a panel — while the description and
+ *    comments remain. A covered SHORT stays put instead of opening the reel
+ *    feed, and only a community rule offers a false-positive report.
  */
 
 import test from 'node:test';
@@ -56,7 +58,7 @@ test('the overlay is drawn on the thumbnail — never over the title', () => {
   );
 });
 
-test('the feed cover names the reason, and the report action lives on the video', () => {
+test('the feed cover names the reason, and reports only a community match', () => {
   assert.ok(
     script.includes("label.textContent = 'Blocked by ClearView'"),
     'the overlay says it is a block, not merely that something was hidden'
@@ -67,14 +69,19 @@ test('the feed cover names the reason, and the report action lives on the video'
   );
   assert.ok(
     /overlay\.append\(label, reason\);/.test(script),
-    'the feed cover is a signpost: label and reason, nothing else'
+    'the feed cover still reads as one clear sentence'
   );
   assert.ok(
-    !/overlay\.append\(label, reason, buildReportButton/.test(script),
-    'reporting does not belong on a feed thumbnail'
+    /if \(verdict\.reportable\) \{\s*overlay\.append\(buildReportButton\(verdict, cardReportContext\(element\)\)\);/.test(script),
+    'a community match offers the report action on the cover itself'
+  );
+  assert.ok(script.includes('function cardReportContext'), 'and the cover sends the video it points at');
+  assert.ok(
+    /if \(!verdict\.matchedItem \|\| !verdict\.reportable\) \{/.test(script),
+    'a personal or built-in block gets no report action'
   );
 
-  assert.ok(script.includes('function buildReportButton'), 'the blocked player carries the report action');
+  assert.ok(script.includes('function buildReportButton'), 'the blocked player carries the same action');
   assert.ok(script.includes("button.textContent = 'Report false positive'"));
   assert.ok(
     /send\('report\/create'/.test(script) && /kind: verdict\.via === 'channel' \? 'channel' : 'keyword'/.test(script),
@@ -85,9 +92,40 @@ test('the feed cover names the reason, and the report action lives on the video'
     'a report click must not also resume the video'
   );
   assert.ok(
-    /const report = buildReportButton\(verdict, \{[\s\S]{0,400}overlay\.append\(report\)/.test(script),
-    'and it reaches the player block, where the video is'
+    /if \(verdict\.reportable\) \{[\s\S]{0,260}const report = buildReportButton\(verdict, \{[\s\S]{0,400}overlay\.append\(report\)/.test(
+      script
+    ),
+    'and it reaches the player block for a community match only'
   );
+});
+
+test('a covered Short stays put; a long video still opens its blocked player', () => {
+  // Opening a Short starts the reel feed, which is exactly what the cover said
+  // would not happen. A long video's watch page is different: it can block the
+  // player in place and still show the description and comments.
+  assert.ok(script.includes('function guardShortNavigation'), 'Short navigation is guarded');
+  assert.ok(script.includes('function isShortsHref'), 'and recognised by the link shape');
+  assert.ok(
+    /if \(!link \|\| !isShortsHref\(link\.getAttribute\('href'\)\)\) return;/,
+    'only a /shorts/ link is stopped'
+  );
+  assert.ok(
+    /event\.preventDefault\(\);\s*event\.stopImmediatePropagation\(\);\s*event\.stopPropagation\(\);/.test(
+      script
+    ),
+    'the card click must not reach YouTube’s router'
+  );
+  assert.ok(
+    /button, \[role="button"\], ytd-menu-renderer, yt-icon-button, tp-yt-paper-icon-button/.test(
+      script
+    ),
+    'the ⋮ and the report button keep their own actions'
+  );
+  assert.ok(
+    /if \(!element\.hasAttribute\('data-cv-protected'\)\) return;/.test(script),
+    'an unprotected card navigates normally'
+  );
+  assert.ok(/link\.click\(\)/.test(script), 'long videos still follow their thumbnail link');
 });
 
 test('a report on the watch page carries the video, not only the rule', () => {

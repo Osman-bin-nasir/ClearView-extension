@@ -202,6 +202,7 @@ function workerState(overrides = {}) {
     passwordSet: overrides.passwordSet ?? false,
     passwordAt: overrides.passwordAt ?? null,
     onboarded: overrides.onboarded ?? true,
+    incognitoAllowed: overrides.incognitoAllowed ?? false,
     blockedChannels: overrides.blockedChannels ?? [],
     bundleCounts: { builtIn: 500, domains: 60, everywhere: 1, youtube: 1, channels: 0, channelIds: 0 },
     global: { available: false, version: null, fetchedAt: null, keywordCount: 0, channelCount: 0, liveKeywords: [], liveChannels: [] },
@@ -317,6 +318,7 @@ test('the settings page renders the ad toggle and the password card', async () =
 
   const text = byId.content.textContent;
   assert.match(text, /Block YouTube ads/, 'the ad toggle must be in settings');
+  assert.match(text, /Block incognito mode/, 'the private-window control must be in settings');
   assert.match(text, /Protection password/, 'the password card must be in settings');
   assert.match(text, /Change password/, 'a set password offers a change');
   assert.match(text, /YouTube protection/, 'the section headings must remain');
@@ -333,7 +335,40 @@ test('the settings page renders the ad toggle and the password card', async () =
   }
 
   const switches = walk(byId.content).filter((node) => node.attributes?.role === 'switch');
-  assert.ok(switches.length >= 4, 'protection, ads, shorts and Brain Bot each need a switch');
+  assert.ok(switches.length >= 5, 'protection, ads, shorts, Brain Bot and incognito each need a switch');
+});
+
+test('turning a settings switch OFF asks for the password; turning one ON does not', async () => {
+  const { byId } = installDom(['content', 'toast', 'protection-scope', 'open-admin']);
+  const { sent } = installChrome(workerState({ passwordSet: true }));
+
+  await import(`../src/options/options.js?case=${Date.now()}${Math.random()}`);
+  await settle();
+
+  const switches = walk(byId.content).filter((node) => node.attributes?.role === 'switch');
+  const ads = switches.find((node) => node.getAttribute('aria-label') === 'Block YouTube ads');
+  assert.equal(ads.getAttribute('aria-checked'), 'true', 'the ad switch starts on');
+
+  // OFF is the weakening direction: it must ask before anything is written.
+  ads.dispatch('click');
+  await tick();
+  assert.equal(dialogInputs().length, 1, 'a password dialog must open for the off direction');
+  assert.match(
+    walk(document.body).map((node) => node.textContent).join(' '),
+    /turn a protection off|password/i,
+    'and say what the password is for'
+  );
+  dialogButton('Cancel').dispatch('click');
+  await tick();
+  assert.ok(!sent.includes('settings/update'), 'cancelling must write nothing');
+
+  // ON is the safe direction: no dialog, and the write goes straight through.
+  const shorts = switches.find((node) => node.getAttribute('aria-label') === 'Block YouTube Shorts');
+  assert.equal(shorts.getAttribute('aria-checked'), 'false');
+  shorts.dispatch('click');
+  await settle();
+  assert.equal(dialogInputs().length, 0, 'enabling must not ask for the password');
+  assert.ok(sent.includes('settings/update'), 'and it must still be saved through the worker');
 });
 
 test('a settings page with no password is the mandatory setup gate', async () => {

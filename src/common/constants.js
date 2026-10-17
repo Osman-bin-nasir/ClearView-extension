@@ -81,6 +81,13 @@ export const DEFAULT_SETTINGS = Object.freeze({
   /** Hide the YouTube Shorts entry point. Never blocks Shorts URLs. */
   blockShorts: false,
   /**
+   * Close private/incognito windows so a block cannot be walked around by
+   * opening one. Off by default: it is the most invasive control in the
+   * extension, and it can only act when Chrome has allowed ClearView in
+   * incognito (the options page says so).
+   */
+  blockIncognito: false,
+  /**
    * Strip YouTube ads: network ad requests are refused, the ad slots are removed
    * from the page, and a video ad is skipped where YouTube allows it. On by
    * default, because it is the one control that only ever removes something the

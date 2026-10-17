@@ -9,6 +9,8 @@ Thumbs.db
 *.zip
 *.crx
 *.pem
+# Throwaway browser/DOM harnesses used while checking a selector or a render.
+.tmp-*/
 .env
 .env.*
 # ...except the template, which is meant to be committed: it is the only place

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { evaluateUrl, evaluateFeedCards } from '../src/background/blocking.js';
 import { MatchType } from '../src/common/matching.js';
+import { buildRuleBundle } from '../src/common/rules-bundle.js';
 
 /** A minimal state object shaped like the worker's live state. */
 function state(overrides = {}) {
@@ -141,6 +142,67 @@ test('feed cards match on title and on channel', () => {
   );
   assert.equal(blocked[0].via, 'title');
   assert.equal(blocked[1].via, 'channel');
+});
+
+test('only a community rule is reportable from a cover', () => {
+  // A report goes to the shared false-positive queue, so it is offered for a
+  // community keyword/channel and NOT for a built-in filter or a rule the user
+  // wrote themselves — the worker decides that without giving the page the lists.
+  const s = state({
+    bundle: {
+      builtIn: ['builtinterm'],
+      youtube: ['userterm', 'communityterm'],
+      channels: ['@personalchannel', '@communitychannel'],
+      globalKeywords: ['communityterm'],
+      globalChannels: ['@communitychannel'],
+    },
+  });
+  const blocked = evaluateFeedCards(
+    [
+      { title: 'builtinterm', channel: 'Someone' },
+      { title: 'userterm', channel: 'Someone' },
+      { title: 'communityterm', channel: 'Someone' },
+      { title: 'ordinary', channel: 'PersonalChannel' },
+      { title: 'ordinary', channel: 'CommunityChannel' },
+    ],
+    s
+  );
+  assert.deepEqual(
+    blocked.map((entry) => entry.reportable),
+    [false, false, true, false, true]
+  );
+  assert.equal(blocked[2].via, 'title');
+  assert.equal(blocked[4].via, 'channel');
+});
+
+test('community provenance survives the real bundle into the feed verdict', () => {
+  const settings = {
+    protectionEnabled: true,
+    brainBotEnabled: true,
+    brainBotMode: 'overlay',
+    strictMode: false,
+    blockedDomains: [],
+    userKeywords: ['friendterm'],
+    youtubeKeywords: [],
+    blockedChannels: [{ handle: '@mine' }],
+  };
+  const bundle = buildRuleBundle(settings, {
+    keywords: [{ keyword: 'SharedTerm' }],
+    channels: [{ handle: '@Shared' }],
+  });
+  const blocked = evaluateFeedCards(
+    [
+      { title: 'friendterm', channel: 'Someone' },
+      { title: 'sharedterm', channel: 'Someone' },
+      { title: 'ordinary', channel: 'Mine' },
+      { title: 'ordinary', channel: 'Shared' },
+    ],
+    { settings, bundle }
+  );
+  assert.deepEqual(
+    blocked.map((entry) => entry.reportable),
+    [false, true, false, true]
+  );
 });
 
 test('a card that gives only the channel NAME is filtered, not left in place', () => {

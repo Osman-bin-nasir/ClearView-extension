@@ -133,9 +133,9 @@ function strongEnough(value) {
 /**
  * Ask the user for the password that is set. Resolves with the password or null.
  *
- * Used before a Protection change. The worker is the one that decides whether it
- * is right — this dialog only collects it, so a wrong password comes back as the
- * worker's refusal and the caller shows it.
+ * Used before a change that weakens protection. The worker is the one that
+ * decides whether it is right — this dialog only collects it, so a wrong
+ * password comes back as the worker's refusal and the caller shows it.
  */
 export async function promptForPassword({ title, message, submitLabel = 'Unlock' } = {}) {
   const result = await askPassword({
@@ -209,35 +209,52 @@ export async function promptToRemovePassword() {
 }
 
 /**
- * Turn Protection on or off, asking for the password when one is set.
+ * Apply a settings patch that turns protection OFF or removes a blocked item.
  *
  * The change is written by the WORKER, which verifies the password against the
  * stored hash — so a page cannot bypass the lock by skipping this dialog, and a
  * wrong password is reported by the one authority that knows. A wrong entry
  * re-opens the dialog (up to three times) rather than closing it on the user.
  *
+ * Enabling a toggle and ADDING an item deliberately do not come through here:
+ * the password exists to stop protection being removed, not to make setup or
+ * strengthening the filter slower.
+ *
  * @returns {{state?: object, cancelled?: boolean, error?: object}}
  */
-export async function changeProtectionWithPassword(nextEnabled) {
-  let message = 'Enter your password to change Protection.';
+export async function changeSettingWithPassword({ patch, title, message }) {
+  let prompt = message ?? 'Enter your password to turn this protection off.';
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const password = await promptForPassword({
-      title: nextEnabled ? 'Turn Protection on' : 'Turn Protection off',
-      message,
-    });
+    const password = await promptForPassword({ title: title ?? 'Confirm this change', message: prompt });
     if (password === null) return { cancelled: true };
     try {
-      const state = await send('settings/update', {
-        patch: { protectionEnabled: nextEnabled },
-        password,
-      });
+      const state = await send('settings/update', { patch, password });
       return { state };
     } catch (error) {
       if (error?.code !== 'invalid_password') return { error };
-      message = 'That was not the right password. Try again.';
+      prompt = 'That was not the right password. Try again.';
     }
   }
   return { error: { code: 'invalid_password', message: 'Too many incorrect attempts.' } };
+}
+
+/** Turn Protection OFF, asking for the password that is set. */
+export async function changeProtectionWithPassword(nextEnabled) {
+  // Turning it ON is free (and must stay free): a password that made enabling
+  // slower would be a lock that punishes the safe direction. Every caller that
+  // disables goes through here; enabling uses a plain settings write.
+  if (nextEnabled) {
+    try {
+      return { state: await send('settings/update', { patch: { protectionEnabled: true } }) };
+    } catch (error) {
+      return { error };
+    }
+  }
+  return changeSettingWithPassword({
+    patch: { protectionEnabled: false },
+    title: 'Turn Protection off',
+    message: 'Enter your password to turn Protection off.',
+  });
 }
 
 /** A sentence for a password failure the worker reported. */

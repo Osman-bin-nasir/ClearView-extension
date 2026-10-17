@@ -19,7 +19,7 @@
 import { AD_RULESET_ID } from '../common/constants.js';
 import { MatchType, checkString } from '../common/matching.js';
 import { isShortsUrl, parseSearchUrl, safeSearchDestination } from '../common/search-engines.js';
-import { channelIdentity, matchBlockedChannel, parseChannelUrl } from '../common/channels.js';
+import { channelIdentity, matchBlockedChannel, normalizeHandle, parseChannelUrl } from '../common/channels.js';
 
 const BLOCKED_PAGE_PATH = 'src/blocked/blocked.html';
 
@@ -302,6 +302,31 @@ function reasonFor(matchType) {
 }
 
 /**
+ * Did this verdict come from a rule in the COMMUNITY list?
+ *
+ * Only community rules can be reported as a false positive from a cover: a
+ * built-in filter and a rule the user wrote are not something the community
+ * queue can act on, and offering the action there would send noise. The
+ * provenance lives in the bundle, not in the card, so a page never has to know
+ * which rules exist.
+ */
+function reportableMatch(bundle, via, matchedItem) {
+  if (!matchedItem) return false;
+  if (via === 'channel') {
+    const handle = normalizeHandle(matchedItem);
+    return Boolean(handle && bundle?.globalChannels?.includes(handle));
+  }
+  if (via === 'title') {
+    // A term the built-in set already blocks is not a community rule doing the
+    // work, even if it also appears in the shared list; report the shared rule
+    // only when it is the reason the card is covered.
+    if (bundle?.builtIn?.includes(matchedItem)) return false;
+    return Boolean(bundle?.globalKeywords?.includes(matchedItem));
+  }
+  return false;
+}
+
+/**
  * Decide which feed cards are Brain Bot content.
  *
  * The same evaluation the app runs over a YouTube feed card, reused here rather
@@ -348,7 +373,12 @@ export function evaluateFeedCards(cards, state) {
       });
       const matched = matchBlockedChannel({ channels: blockedChannels, channelIds, channelNames }, identity);
       if (matched) {
-        blocked.push({ index, matchedItem: matched, via: 'channel' });
+        blocked.push({
+          index,
+          matchedItem: matched,
+          via: 'channel',
+          reportable: reportableMatch(bundle, 'channel', matched),
+        });
         return;
       }
     }
@@ -363,7 +393,12 @@ export function evaluateFeedCards(cards, state) {
         userKeywords: bundle.youtube,
       });
       if (verdict.blocked) {
-        blocked.push({ index, matchedItem: verdict.matchedItem, via: 'title' });
+        blocked.push({
+          index,
+          matchedItem: verdict.matchedItem,
+          via: 'title',
+          reportable: reportableMatch(bundle, 'title', verdict.matchedItem),
+        });
         return;
       }
     }
@@ -373,7 +408,12 @@ export function evaluateFeedCards(cards, state) {
 
     const channelVerdict = checkString(channel, { isUrl: false, builtIn: bundle.builtIn, userKeywords: [] });
     if (channelVerdict.blocked) {
-      blocked.push({ index, matchedItem: channelVerdict.matchedItem, via: 'channel' });
+      blocked.push({
+        index,
+        matchedItem: channelVerdict.matchedItem,
+        via: 'channel',
+        reportable: false,
+      });
     }
   });
 

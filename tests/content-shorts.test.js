@@ -129,6 +129,31 @@ test('a Short in a feed shelf is judged too, and only once', () => {
   );
 });
 
+test('a recycled reel is re-judged when a swipe changes the Short', () => {
+  // The live player reuses ONE `ytd-reel-video-renderer` for every swipe. The
+  // element, its overlay and `data-cv-protected` all survive, so without an
+  // identity the next Short was treated as already blocked: covered, paused and
+  // impossible to play. This is the regression guard for that.
+  assert.ok(script.includes('function cardIdentity'), 'a card needs an identity, not only an element');
+  assert.ok(
+    /record\.identity !== cardIdentity\(element\)/.test(script),
+    'a changed identity must make the old decision stale'
+  );
+  assert.ok(
+    /record\.identity = identity/.test(script),
+    'every applied verdict must store the video it was decided for'
+  );
+  assert.ok(script.includes('function releaseStaleShorts'), 'a swipe must release the old cover immediately');
+  assert.ok(script.includes('shownShortHref === location.href'), 'the release is keyed to the Shorts URL');
+  assert.ok(
+    /function scheduleScan\(\)[\s\S]{0,180}releaseStaleShorts\(\)/.test(script),
+    'the mutation pass must release before it debounces'
+  );
+  assert.ok(script.includes('pausedByClearView'), 'only a pause this script made may be undone');
+  assert.ok(script.includes('function resumeShortIfWePaused'), 'a clean Short must resume after a swipe');
+  assert.ok(script.includes('markCardClean(element)'), 'clean verdicts go through the resuming path');
+});
+
 test('/shorts resolves the channel from the reel that is on screen', () => {
   // A /shorts/<id> URL names no channel. The reel’s header names it (the live
   // link is /@handle/shorts), and the page’s player response is the fallback.

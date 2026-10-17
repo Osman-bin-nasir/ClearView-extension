@@ -21,6 +21,10 @@ workflow.
   above the feed, the Shorts shelf and its individual cards, and the channel
   page's Shorts tab — **and** blocks Shorts links, matching the app's
   `blockShorts` control.
+- **Block incognito mode** — closes private windows as they open, so a block
+  cannot be walked around by switching profiles. Chrome must also allow ClearView
+  in incognito (chrome://extensions → Details); the settings card says whether it
+  does, and the password guards turning it off.
 - **Block a YouTube channel** from a video's ⋮ menu, a Short's ⋮, or by
   right-clicking a thumbnail — no need to open the video first. Its videos leave
   your feeds, its search result disappears, and its channel page and videos will
@@ -67,11 +71,12 @@ settings page.
 
 | Setting | Purpose |
 | --- | --- |
-| **Protection** | Master switch. Off means nothing is blocked at all. Always gated by the password. |
+| **Protection** | Master switch. Off means nothing is blocked at all. Turning it off is gated by the password; turning it on is not. |
 | **Protection password** | Required device lock, created at first run. Change it from *Security*; it cannot be removed. |
 | **Strict Mode** | Adds the app's discovery terms (bikini, lingerie, …). |
 | **Block YouTube ads** | Refuses YouTube ad requests, removes ad slots, and chases off video ads (muted, at 16×, with the ad's own UI hidden). On by default. |
 | **Block YouTube Shorts** | Hides the Shorts entry points, the feed shelf and its cards, and blocks Shorts links (app parity). |
+| **Block incognito mode** | Closes private windows as they open, so a block cannot be walked around by switching profiles. Requires Chrome's *Allow in incognito* for ClearView; the card reports whether it is granted. |
 | **Brain Bot Protection** | Filters YouTube feed cards. Choose *Remove from feed* or *Show protection overlay*. |
 | **Blocked websites / keywords** | Your own rules. Keywords apply to every site and search. |
 | **Brain Bot keywords** | Keywords matched against YouTube titles only. |
@@ -204,10 +209,25 @@ the worker's — and keeps a page from holding the rule set.
   (an instant hide, through `:has()`) and the content script's own pass (the
   safety net for Chrome 102–104, which has no `:has()`, and for the chip, whose
   markup names itself in no attribute and can only be recognised by its text).
+
+  **The player reuses one reel element for every swipe.** A decision is stamped
+  with the Short's identity (title, channel and `/shorts/<id>` link), so a new
+  Short on the same element is re-judged; the URL change also releases the old
+  cover and pause synchronously, before the debounced scan. Only playback this
+  script paused is resumed, and only once the next Short is confirmed clean —
+  otherwise swiping left the next Short covered and unable to play.
 - **Brain Bot:** cards are either removed (`display: none`) or covered in place
   by an overlay, per the chosen mode. YouTube is a single-page app, so changes are
   re-applied on `yt-navigate-finish` and on DOM mutations (debounced), and every
   card is marked once handled — an overlay can never be stacked twice.
+
+  **Remove mode settles the grid it collapses.** Hiding a card takes its cell out
+  of the grid, so the next row slides into the viewport — and that is a *style*
+  change, so YouTube fires no mutation and no scroll happens. Without a follow-up
+  pass the newly visible cards were never judged: a blocked channel's Shorts
+  stayed on its channel page, visible, and only showed the blocked player when
+  clicked. The scan chains one more debounced pass while Remove mode still has an
+  undecided card near the viewport, until the visible grid is clear.
 
   **The overlay is a block, not a decoration.** It is drawn on the card's
   *thumbnail only* — the title and byline stay readable — and it names what
@@ -215,8 +235,10 @@ the worker's — and keeps a page from holding the rule set.
   cannot account for is one they cannot judge. A blocked channel is presented
   the same way as a keyword match: the display mode chooses cover or removal for
   both, so a channel the user just blocked cannot vanish before the reason can be
-  read. The cover is a **near-solid black** panel, and it is a signpost: the report
-  action lives on the video's own page, not on the feed thumbnail.
+  read. The cover is a **near-solid black** panel. It carries
+  **Report false positive** only when the match came from a **community**
+  keyword or channel — a rule in the shared list. A rule the user wrote, or a
+  built-in filter, gets no report action: that queue is not theirs to answer.
 
   **A covered thumbnail can never play a hover preview — and a hover cannot wipe
   the cover.** Covering the thumbnail is not enough on its own: YouTube starts a
@@ -239,17 +261,24 @@ the worker's — and keeps a page from holding the rule set.
   re-renders without a pointer event, because a preview that keeps playing is
   still playback.
 
-  **A covered video is paused, not unavailable.** Clicking the cover (or the
-  card's title) opens the video page normally; there the content script asks the
-  worker whether the video is blocked and, if so, pauses it behind a panel over
-  the *player* only. The description, channel and **comments stay readable**, and
-  the panel carries **Report false positive** — so a mistaken block can be judged
-  and reported without leaving the page. The report sends the matched rule *and*
-  the video URL, in the one free-text field the reports endpoint already accepts
-  (`Video: … | Title: … | Channel: …`), which is what lets an administrator see
-  exactly which video was wrongly blocked. The playback guard pauses the element
-  again if anything tries to resume it, and the block is removed on the next
-  `yt-navigate-finish`.
+  **A long covered video is paused, not unavailable.** Clicking the cover (or
+  the card's title) opens the video page normally; there the content script asks
+  the worker whether the video is blocked and, if so, pauses it behind a panel
+  over the *player* only. The description, channel and **comments stay readable**,
+  and a community match's panel carries **Report false positive** — so a mistaken
+  block can be judged and reported without leaving the page. The report sends the
+  matched rule *and* the video URL, in the one free-text field the reports
+  endpoint already accepts (`Video: … | Title: … | Channel: …`), which is what
+  lets an administrator see exactly which video was wrongly blocked. The playback
+  guard pauses the element again if anything tries to resume it, and the block is
+  removed on the next `yt-navigate-finish`.
+
+  **A covered Short stays where it is.** Following its link would open
+  `/shorts/…` and start the reel feed, which the cover just said would not happen,
+  so a click inside a protected Short card — thumbnail, title or cover — is
+  stopped before YouTube's router sees it. The ⋮ menu and the report action keep
+  their own jobs. This is the one place a covered card does not open a page: a
+  Short has no watch page behind it with a readable description and comments.
 
   **A decision lasts only as long as its effect.** The record says what the
   script *decided*, not what the page currently shows — and YouTube re-stamps and
@@ -347,7 +376,7 @@ which is every card on a channel's own grid.
   the old reel header had already been replaced; reading only that left the
   title empty, so a keyword could never match a Short.
 
-  A card also comes in **two container shapes**, and both are recognised. The
+  A card also comes in **more than one container shape**, and all are recognised. The
   renderers (`ytd-rich-item-renderer` and friends) wrap the modern card, but the
   channel home tab — and the home feed on accounts YouTube serves the bare grid
   to — renders `yt-lockup-view-model` at the top level with **no renderer around
@@ -355,7 +384,13 @@ which is every card on a channel's own grid.
   reported as "it does nothing": the ⋮ click had no card to record, so the menu
 got no entry at all and nothing could be clicked or confirmed; and the card was
   never scanned, so a channel blocked anywhere else kept showing. One lockup is
-evaluated once — a lockup nested inside a renderer is already covered by it.
+  evaluated once — a lockup nested inside a renderer is already covered by it.
+
+  The legacy Shorts **shelf** is a third shape: `ytd-reel-shelf-renderer` holds
+  `ytd-reel-item-renderer` cards, each with its own thumbnail link and title and
+  no lockup inside. It is judged like any other card — a `ytd-rich-grid-slim-media`
+  Short too — because without that a blocked channel's Short stayed in the shelf
+  after a scroll, visible until clicked, when only the player refused it.
 - **Right-click.** *Block this channel (ClearView)* appears on a thumbnail, the
   player, or a channel name. A thumbnail links to a *video*, which names no
   channel, so the content script reports which card was clicked and the worker
@@ -621,7 +656,7 @@ release. It exits `0` when every required anchor is present, `1` when one is
 missing, and `2` when the pages could not be fetched (inconclusive, never a
 pass).
 
-262 tests, covering:
+270 tests, covering:
 
 - **`tests/matching.test.js`** — normalization (fullwidth, leetspeak, separator
   and spaced forms), whole-word boundaries, domain matching, the three tiers, and
@@ -749,21 +784,25 @@ pass).
 | **YouTube ads blocked** | With the toggle on, reload YouTube: no pre-roll, no feed/sidebar ad slots, no banner. Turn it off and the ad slots return on the next reload. |
 | **Mandatory setup** | On a fresh install the settings page is only a password form: no settings, no skip. Close it and reopen — it is still there, and the popup says *Finish setup*. |
 | **Nothing changes before setup** | On a fresh install, a settings write from the console (`settings/update`) is refused with `password_required`. |
-| **Protection gated by the password** | Flip Protection on the popup or the settings page — it asks for the password, a wrong one changes nothing, and five wrong guesses lock the check for a minute. |
+| **Protection off is gated; on is free** | Turn Protection on from the popup — no password. Turn it off — it asks, a wrong one changes nothing, and five wrong guesses lock the check for a minute. |
 | **Export / erase** | Settings → Advanced → *Export my data* downloads a JSON file without any credential; *Erase all data* asks for confirmation, then returns the page to setup. |
 | Brain Bot remove / overlay | Toggle each mode on a home feed. |
 | Dynamic navigation | Scroll the feed; overlays must not duplicate. |
 | **Block a channel from ⋮** | Open a video, use the ⋮ menu → *Block this channel*; the entry then reads *Unblock this channel*. |
 | **Block a Short’s channel from its ⋮** | Open `/shorts/…`, use the three-dot menu → *Block channel*: the toast names the channel, and the Short is covered (overlay) or removed (remove) and paused. |
+| **Password only for the weakening direction** | Turning Shorts / ads / Brain Bot / Strict Mode ON is instant; turning any of them OFF asks for the password. Adding a keyword or channel is instant; removing one asks. |
+| **Block incognito mode** | Allow ClearView in incognito in `chrome://extensions`, turn the toggle on, then open a private window: it closes. The card warns when Chrome has not allowed the extension. |
 | **A Shorts shelf card responds too** | A blocked channel or matching keyword covers or removes its Short in the home shelf, not only in the player. |
+| **Remove mode leaves no visible Shorts behind** | With a channel blocked and *Remove* selected, open its channel page or Shorts tab and scroll: the grid empties as it loads, with no visible Short left to click. |
 | **Block a channel by right-click** | Right-click a thumbnail → *Block this channel (ClearView)*. On the current grid the card carries no channel link: the block is then recorded by name, and the toast says which name. |
 | **A blocked channel’s search result is gone** | Search the channel's name: no avatar result, no Subscribe button, for it — and other channels' results are untouched. |
-| **A blocked channel is gone** | Its cards leave home/search/subscriptions (both card markups — the `yt-lockup-view-model` grid and the classic list), `/@handle` and `/channel/UC…` show the blocked page, and its video pages redirect there. |
+| **A blocked channel is gone** | Its cards leave home/search/subscriptions (the `yt-lockup-view-model` grid, the classic list, and the legacy Shorts shelf's `ytd-reel-item-renderer`), `/@handle` and `/channel/UC…` show the blocked page, and its video pages redirect there. |
 | **A block made on a video page reaches the feed** | Block from a video's ⋮ menu, go back to the feed, scroll: no card from that channel, including ones already on screen. |
 | **Brain Bot overlay is visible** | Switch to *Show protection overlay* with a keyword that matches: the card stays, its **thumbnail** is covered by a *Blocked by ClearView* overlay naming the matched term, and switching to *Remove* makes the same card leave. |
-| **A covered card opens a blocked player** | In overlay mode, click the covered thumbnail: the video page opens with the player blocked and paused, while the description and comments remain readable and the block offers *Report false positive*. Press play: it pauses again. The card's ⋮ still opens, with *Unblock* in it. |
+| **A covered long video opens a blocked player** | In overlay mode, click a covered long video's thumbnail: the video page opens with the player blocked and paused, while the description and comments remain readable. Press play: it pauses again. The card's ⋮ still opens, with *Unblock* in it. |
+| **A covered Short does not open the reel player** | In overlay mode, click a covered Short's thumbnail or title: the page does not navigate, and the Short does not play. The ⋮ still opens. |
 | **A blocked channel gets the overlay too** | Block a channel, return to the feed: its card stays, with only the thumbnail covered and the title readable — exactly like a keyword match. |
-| **A false positive can be reported** | In overlay mode, click a covered thumbnail, then *Report false positive* on the blocked player: the link changes to *Reported — thanks*, the video stays paused, and the dashboard shows the report under that channel with the video URL. |
+| **Only a community rule can be reported** | With a keyword or channel from the shared list matching a card, *Report false positive* appears on its cover (and on the blocked player for a long video). A keyword or channel the user blocked themselves has no report action anywhere. Reporting changes the link to *Reported — thanks* and the dashboard shows the rule with the video URL. |
 | **A covered thumbnail never previews** | Hover a covered card for several seconds: no muted preview plays, and no sound is heard. |
 | **Ads cost a moment, not a minute** | Open a video whose ad cannot be blocked at the network layer: the ad is muted and gone in a fraction of a second, with no countdown, badge or "your video will play after the ad" message on screen. |
 | **The overlay survives a feed re-render** | In overlay mode, scroll the feed away and back: a blocked card comes back still covered rather than showing its thumbnail uncovered. |
@@ -907,6 +946,10 @@ tests/                        node --test suite
   stitched into the video stream (SSAP) cannot be removed at all — the pass mutes
   them and chases them off at 16×, which is the best any browser extension can
   honestly promise for those.
+- **Block incognito is best-effort.** Chrome only exposes private windows to an
+  extension when the user has allowed it in incognito, and it has no API for
+  disabling incognito globally. When that permission is missing, the card says so
+  rather than pretending the switch is acting.
 - **The password is a device lock.** It is not authentication, and it does not
   survive clearing the extension's data — see §12.
 - Community keywords are distributed after a refresh (TTL 6 h, or on demand), so
@@ -931,9 +974,12 @@ A **mandatory** lock on the **Protection** switch, created at first run
   `settings/update` with `password_required` until a password is set. That is what
   makes it mandatory in practice rather than a dialog a page can skip: a fresh
   install has no password-less window in which Protection could be turned off.
-- **What it guards.** Turning Protection on or off, from any screen, via the
-  worker's `settings/update` — the one path every change goes through. Other
-  settings depend on the password existing, but do not ask for it every time.
+- **What it guards.** The direction that WEAKENS protection: turning any switch
+  off (Protection, Brain Bot, Shorts, YouTube ads, Strict Mode, block-incognito),
+  and removing a blocked channel, website or keyword. The worker enforces this in
+  `settings/update`, so a page cannot skip the dialog, and in `channel/unblock`
+  for the channel list. Turning a switch ON and ADDING a block are free — a lock
+  that made the safe direction slower would be the wrong trade.
 - **Lockout.** Five wrong guesses lock the check for a minute
   (`cv.passwordAttempts`, local like the hash). A correct password clears the
   count; while locked, even the right password waits.
