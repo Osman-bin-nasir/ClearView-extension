@@ -33,7 +33,7 @@ import {
   isOnboarded,
   markOnboarded,
   setPassword,
-  verifyPassword,
+  verifyPasswordGuarded,
 } from '../common/password.js';
 import {
   ApiError,
@@ -392,8 +392,11 @@ async function rulesForContent() {
     builtIn: bundle.builtIn,
     // A COUNT, not the list. The content script needs to know whether there is
     // anything to filter a channel against — it does not need to know which
-    // channels, because the matching stays in the worker.
-    blockedChannelCount: bundle.channels.length + bundle.channelIds.length,
+    // channels, because the matching stays in the worker. Name-only blocks count
+    // too: the current grid prints a channel name and no link, and leaving that
+    // kind out meant a blocked channel never turned the feed scan on at all.
+    blockedChannelCount:
+      bundle.channels.length + bundle.channelIds.length + bundle.channelNames.length,
   };
 }
 
@@ -460,8 +463,15 @@ const handlers = {
    */
   'settings/update': async (message) => {
     const patch = message.patch ?? {};
-    if (Object.prototype.hasOwnProperty.call(patch, 'protectionEnabled') && (await hasPassword())) {
-      const ok = await verifyPassword(message.password ?? '');
+    // The password is MANDATORY from install: until one exists there is no
+    // settings write at all, so a fresh install cannot be reconfigured (or
+    // Protection turned off) before it is locked down. Setup's own
+    // `password/set` is a separate message and is never blocked by this.
+    if (!(await hasPassword())) {
+      throw new ApiError('password_required', 403, 'Set a Protection password to finish setup.');
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'protectionEnabled')) {
+      const ok = await verifyPasswordGuarded(message.password ?? '');
       if (!ok) throw new ApiError('invalid_password', 403, 'Enter your password to change Protection.');
     }
     await updateSettings(patch);
@@ -485,30 +495,30 @@ const handlers = {
    * reported next to the field rather than by a settings write that appears to
    * fail for no reason.
    */
-  'password/verify': async (message) => ({ ok: await verifyPassword(message.password) }),
+  'password/verify': async (message) => ({ ok: await verifyPasswordGuarded(message.password) }),
 
   /** Replace the password, requiring the current one. */
   'password/change': async (message) => {
-    if (!(await verifyPassword(message.current ?? ''))) {
+    if (!(await verifyPasswordGuarded(message.current ?? ''))) {
       throw new ApiError('invalid_password', 403, 'The current password was not correct.');
     }
     await setPassword(message.next);
     return { set: true };
   },
 
-  /** Remove the password, requiring it — otherwise the lock removes itself. */
+  /**
+   * Remove the password, requiring it.
+   *
+   * The UI no longer offers this — the password is mandatory — but the handler
+   * stays so an old page cannot silently keep a lock it cannot verify, and so
+   * removal still demands proof of ownership rather than being a free bypass.
+   */
   'password/remove': async (message) => {
-    if (!(await verifyPassword(message.password ?? ''))) {
+    if (!(await verifyPasswordGuarded(message.password ?? ''))) {
       throw new ApiError('invalid_password', 403, 'Enter your password to remove it.');
     }
     await clearPassword();
     return describeState();
-  },
-
-  /** Record that the first-run offer was dismissed, so it is not shown again. */
-  'password/dismissOnboarding': async () => {
-    await markOnboarded();
-    return { onboarded: true };
   },
 
   'rules/sync': async (message) => {
@@ -530,6 +540,33 @@ const handlers = {
     const state = await ensureState();
     const cards = Array.isArray(message.cards) ? message.cards.slice(0, 120) : [];
     return { blocked: evaluateFeedCards(cards, state) };
+  },
+
+  /**
+   * Is the video being watched blocked?
+   *
+   * The same evaluator as a feed card, so clicking a covered thumbnail lands on
+   * a page that agrees with the cover: a blocked channel, or a title the Brain
+   * Bot filters match. The answer is returned rather than acted on here — the
+   * content script blocks the PLAYER and leaves the page (description, comments)
+   * readable, which is the difference between blocking a video and blocking a
+   * whole page.
+   */
+  'video/check': async (message) => {
+    const state = await ensureState();
+    if (!state.settings?.protectionEnabled) return { blocked: false, matchedItem: null, via: null };
+    const blocked = evaluateFeedCards(
+      [
+        {
+          title: typeof message.title === 'string' ? message.title : '',
+          channel: typeof message.channel === 'string' ? message.channel : '',
+          channelUrl: typeof message.channelUrl === 'string' ? message.channelUrl : null,
+        },
+      ],
+      state
+    );
+    if (blocked.length === 0) return { blocked: false, matchedItem: null, via: null };
+    return { blocked: true, matchedItem: blocked[0].matchedItem, via: blocked[0].via };
   },
 
   'submission/create': async (message) => {
@@ -642,6 +679,42 @@ const handlers = {
 
   'stats/reset': async () => {
     await resetStats();
+    return describeState();
+  },
+
+  /**
+   * Everything this install stores, as one JSON document.
+   *
+   * Deliberately excludes the password record and the admin session: an export
+   * is the user's settings and activity, not their credentials.
+   */
+  'data/export': async () => {
+    const state = await ensureState();
+    const [stats, anonymousId] = await Promise.all([getStats(), getAnonymousId()]);
+    return {
+      exportedAt: new Date().toISOString(),
+      settings: state.settings,
+      blockedChannels: normalizeBlockedChannels(state.settings.blockedChannels),
+      stats,
+      anonymousId,
+      sharedRules: {
+        version: (await getGlobalRules())?.version ?? null,
+      },
+    };
+  },
+
+  /**
+   * Erase everything this extension stored on this device.
+   *
+   * A full clear, not a list of keys: a key added later must not be the one
+   * that survives an "erase all data". The password and admin session go with
+   * it, which is why the UI returns the user to the mandatory setup screen.
+   */
+  'data/erase': async () => {
+    await chrome.storage.sync.clear();
+    await chrome.storage.local.clear();
+    await refreshState();
+    await applyState();
     return describeState();
   },
 

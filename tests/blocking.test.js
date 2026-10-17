@@ -389,7 +389,7 @@ test('a blocked channel is matched through its LINK, not just its name', () => {
 
 test('an explicit channel block is not affected by the display mode', () => {
   // It is reported as a channel match whatever the mode; the content script
-  // removes those cards rather than overlaying them.
+  // applies the same cover-or-remove presentation to it as to a keyword match.
   for (const mode of ['remove', 'overlay']) {
     const s = channelState({ settings: { brainBotMode: mode } });
     const blocked = evaluateFeedCards([{ title: 'x', channel: 'BlockedChannel' }], s);

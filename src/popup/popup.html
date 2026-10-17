@@ -7,25 +7,28 @@
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
-    <header class="popup-header">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true">🛡</span>
-        <span class="brand-name">ClearView</span>
+    <!--
+      The header is the only static markup here: the brand mark, the screen's
+      name and the lock that reports whether the Protection password is set —
+      none of it depends on the worker, so it is painted immediately and the popup
+      never flashes empty while `state/get` is in flight. Every other row is built
+      by `popup.js`, because every other row depends on state.
+
+      The shape is the app's Protection screen cut down to a popup: the name and
+      its state, the activity panel, and one quiet footer row into the rest.
+    -->
+    <header class="popup-head">
+      <span class="brand-mark" aria-hidden="true">
+        <img src="../../icons/logo.png" alt="" />
+      </span>
+      <div class="popup-head__text">
+        <h1 class="popup-title">ClearView</h1>
+        <p class="popup-sub" id="popup-status"></p>
       </div>
-      <button class="icon-btn" id="open-options" type="button" aria-label="Full settings" title="Full settings">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 7 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 2.6 15a1.65 1.65 0 0 0-1.51-1H1a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 2.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 7 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-        </svg>
-      </button>
+      <button class="icon-btn" id="popup-lock" type="button" aria-label="Protection password"></button>
     </header>
 
-    <main id="content"></main>
-
-    <footer class="popup-footer">
-      <button class="btn primary small" id="open-options-footer" type="button">Full settings</button>
-      <button class="btn small" id="open-admin" type="button">Admin dashboard</button>
-    </footer>
+    <main id="content" aria-live="polite"></main>
 
     <script type="module" src="popup.js"></script>
   </body>

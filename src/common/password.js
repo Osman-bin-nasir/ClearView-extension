@@ -148,6 +148,81 @@ export async function verifyPassword(password) {
 /** Forget the password. */
 export async function clearPassword() {
   await writeLocal(STORAGE.password, null);
+  await clearPasswordAttempts();
+}
+
+// ── Rate limiting ────────────────────────────────────────────────────────
+//
+// A four-character password on a shared machine is guessable by hand, so a
+// wrong guess has to cost something. Five failures lock the check for a minute;
+// a correct password clears the count. The record is LOCAL, like the hash, so a
+// sync cannot reset somebody else's lockout.
+
+/** How many wrong guesses in a row are free. */
+export const PASSWORD_MAX_ATTEMPTS = 5;
+/** How long the check stays locked after the last free guess. */
+export const PASSWORD_LOCK_MS = 60_000;
+
+async function readAttempts() {
+  const record = await readLocal(STORAGE.passwordAttempts, null);
+  if (!record || typeof record !== 'object') return { count: 0, until: 0 };
+  return {
+    count: Number.isFinite(record.count) ? record.count : 0,
+    until: Number.isFinite(record.until) ? record.until : 0,
+  };
+}
+
+/** Milliseconds until the password check unlocks; 0 when it is available. */
+export async function passwordLockRemaining() {
+  const { until } = await readAttempts();
+  return Math.max(0, Number(until) - Date.now());
+}
+
+/** Forget failed attempts (called on a correct password). */
+export async function clearPasswordAttempts() {
+  await writeLocal(STORAGE.passwordAttempts, null);
+}
+
+/** Record one wrong guess. Returns the remaining lockout in ms (0 if none). */
+async function registerPasswordFailure() {
+  const record = await readAttempts();
+  const count = record.count + 1;
+  if (count < PASSWORD_MAX_ATTEMPTS) {
+    await writeLocal(STORAGE.passwordAttempts, { count, until: 0 });
+    return 0;
+  }
+  const until = Date.now() + PASSWORD_LOCK_MS;
+  await writeLocal(STORAGE.passwordAttempts, { count, until });
+  return PASSWORD_LOCK_MS;
+}
+
+/**
+ * Verify a password with the lockout applied.
+ *
+ * Use this from the worker rather than `verifyPassword` directly: the lockout is
+ * only real if every check that can be reached from the UI goes through it.
+ * Throws `password_locked` while the lock is on, and returns false for a wrong
+ * password (the caller words the refusal).
+ */
+export async function verifyPasswordGuarded(password) {
+  const remaining = await passwordLockRemaining();
+  if (remaining > 0) {
+    throw passwordError(
+      'password_locked',
+      `Too many wrong attempts. Try again in ${Math.ceil(remaining / 1000)} seconds.`
+    );
+  }
+  if (await verifyPassword(password)) {
+    await clearPasswordAttempts();
+    return true;
+  }
+  if ((await registerPasswordFailure()) > 0) {
+    throw passwordError(
+      'password_locked',
+      `Too many wrong attempts. Try again in ${Math.ceil(PASSWORD_LOCK_MS / 1000)} seconds.`
+    );
+  }
+  return false;
 }
 
 /** Has the first-run offer been answered (by creating a password or skipping)? */

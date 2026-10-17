@@ -2,30 +2,22 @@
  * The blocked page.
  *
  * Stands alone — it is the one page a user can reach without opening the
- * extension — so it carries its own copy of the tokens rather than importing
- * the design system. Kept to the same neutral palette: one surface, hairline
- * border, no shadow, and the reason in plain type.
+ * extension — so it carries its own copy of the tokens rather than importing the
+ * design system. It is the app's alert card and nothing else: the maroon the app
+ * uses for "you have been stopped", white type, one drawn badge, and no controls
+ * (the browser's Back button is the way out; see `blocked.js`).
  */
 
 :root {
-  --bg: #ffffff;
-  --surface: #ffffff;
-  --text: #18181b;
-  --muted: #6b7280;
-  --faint: #9ca3af;
-  --outline: #e4e4e7;
-  color-scheme: light dark;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0b0b0c;
-    --surface: #111113;
-    --text: #ededef;
-    --muted: #a1a1aa;
-    --faint: #71717a;
-    --outline: #26262a;
-  }
+  --bg: #0b0e10;
+  --bg-glow: #14181b;
+  --card: #5d1f22;
+  --card-2: #47181b;
+  --text: #ffffff;
+  --muted: rgba(255, 255, 255, 0.82);
+  --faint: rgba(255, 255, 255, 0.6);
+  --tile: rgba(255, 255, 255, 0.14);
+  color-scheme: dark;
 }
 
 * {
@@ -38,48 +30,52 @@ body {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: var(--bg);
+  background-color: var(--bg);
+  background-image: radial-gradient(130% 60% at 50% -8%, var(--bg-glow) 0%, rgba(11, 14, 16, 0) 72%);
+  background-repeat: no-repeat;
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
 .card {
-  width: min(420px, 100%);
-  background: var(--surface);
-  border: 1px solid var(--outline);
-  border-radius: 12px;
-  padding: 28px 24px;
+  width: min(460px, 100%);
+  border-radius: 24px;
+  padding: 28px 26px;
+  background-color: var(--card);
+  background-image: linear-gradient(180deg, var(--card), var(--card-2));
+  box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
 }
 
 .badge {
-  width: 32px;
-  height: 32px;
-  margin: 0 0 16px;
+  width: 52px;
+  height: 52px;
+  margin: 0 0 18px;
   display: grid;
   place-items: center;
-  border-radius: 8px;
-  border: 1px solid var(--outline);
-  color: var(--muted);
+  border-radius: 17px;
+  background: var(--tile);
+  color: #ffffff;
 }
 
 h1 {
-  margin: 0 0 6px;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  margin: 0 0 8px;
+  font-size: 25px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  line-height: 1.15;
 }
 
 #message {
-  margin: 0 0 16px;
-  font-size: 13px;
+  margin: 0 0 18px;
+  font-size: 14.5px;
   color: var(--muted);
   line-height: 1.55;
 }
 
 .note {
   margin: 0;
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--faint);
   line-height: 1.55;
 }

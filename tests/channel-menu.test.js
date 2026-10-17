@@ -219,6 +219,24 @@ test('a CARD’s ⋮ menu gets the entry too, in BOTH menu shapes YouTube serves
   );
 });
 
+test('the Shorts player’s ⋮ gets the entry, into the sheet it actually opens', () => {
+  // A live Short opens a `yt-sheet-view-model` inside the document-level popup
+  // container — the same contextual sheet as a card’s, but without the menu’s
+  // `role` on every build. The entry was found but never placed when the list
+  // was matched only by role, so a Short’s three dots had no Block channel.
+  assert.ok(
+    /ytd-reel-video-renderer tp-yt-iron-dropdown/.test(script),
+    'a Short’s menu may render inside the reels component rather than the popup container'
+  );
+  assert.ok(script.includes('function sheetList(root)'), 'the sheet list is resolved in one place');
+  assert.ok(
+    script.includes("root.querySelector('yt-sheet-view-model yt-list-view-model')"),
+    'the list is found by its sheet when it carries no role="menu"'
+  );
+  assert.ok(/sheetList\(candidate\)/.test(script), 'menu detection uses the sheet list');
+  assert.ok(/sheetList\(dropdown\)/.test(script), 'the injection target uses the same resolution');
+});
+
 test('the menu icon is built as NODES, never with innerHTML', () => {
   // youtube.com enforces Trusted Types (`require-trusted-types-for 'script'`), and
   // there `element.innerHTML = '…'` THROWS — which is how the entry came to be

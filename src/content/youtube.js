@@ -74,6 +74,9 @@
     '.ytp-ad-skip-button',
     '.ytp-skip-ad-button',
     '.ytp-ad-skip-button-slot button',
+    '.ytp-ad-skip-button-container button',
+    '.ytp-skip-ad-button__text',
+    'button[class*="skip-button"]',
   ].join(',');
 
   /** The "close" control on a banner/overlay ad drawn over the video. */
@@ -98,6 +101,10 @@
     'ytd-compact-video-renderer',
     'ytd-rich-grid-media',
     'ytd-channel-renderer',
+    // One Short in the reels player. It is a card in every way that matters:
+    // it has a title, a channel and a ⋮, and Brain Bot has to be able to cover
+    // or remove it exactly like a long video's card.
+    'ytd-reel-video-renderer',
   ].join(',');
 
   /**
@@ -113,6 +120,22 @@
    * blocked elsewhere kept showing. One selector, two symptoms.
    */
   const LOCKUP_CARD_SELECTOR = 'yt-lockup-view-model';
+
+  /**
+   * The video image inside a card — where a protection overlay belongs.
+   *
+   * Drawn on the thumbnail rather than on the whole card, for two reasons: the
+   * block is read on the thing the user is looking at, and the card's title and
+   * byline stay legible underneath the message instead of being painted over.
+   * The anchor comes first because it is the click target that would play the
+   * video, so covering it also covers the way in.
+   */
+  const THUMBNAIL_SELECTOR = [
+    'a#thumbnail',
+    'ytd-thumbnail',
+    'yt-thumbnail-view-model',
+    '.ytThumbnailViewModelImage',
+  ].join(',');
 
   /**
    * How long after the ⋮ trigger was clicked we will still look for its menu.
@@ -131,8 +154,19 @@
    * classic card as a `yt-icon-button` in its `ytd-menu-renderer`. Matched by
    * SHAPE, because this is only ever consulted in the second after a click.
    */
-  const CARD_MENU_TRIGGER_SELECTOR =
-    'button[aria-label="More actions"], yt-icon-button[aria-label="Action menu"], ytd-menu-renderer button, ytd-menu-renderer .dropdown-trigger';
+  const CARD_MENU_TRIGGER_SELECTOR = [
+    'button[aria-label="More actions"]',
+    'button[aria-label="More"]',
+    'button[aria-label="More options"]',
+    'yt-icon-button[aria-label="Action menu"]',
+    // A Short's ⋮ in the reels player is its own control rather than a card's
+    // `ytd-menu-renderer`; matched by these names because the action bar has
+    // been renamed more than once.
+    '.ytp-shorts-more-button',
+    'button.ytp-shorts-more-button',
+    'ytd-menu-renderer button',
+    'ytd-menu-renderer .dropdown-trigger',
+  ].join(', ');
 
   /**
    * The list inside the CURRENT card menu.
@@ -145,6 +179,23 @@
    * page's `ytd-menu-popup-renderer` list, which is why both are matched.
    */
   const CARD_SHEET_SELECTOR = 'yt-list-view-model[role="menu"]';
+
+  /**
+   * The list rows inside a card's sheet.
+   *
+   * The same sheet ships with and without `role="menu"` on its list — the Shorts
+   * player's ⋮ uses the version without it — so the list is found by its own
+   * element and, failing that, by the sheet around it. Without this the menu was
+   * found but no place to put the entry was, and the Shorts menu stayed bare.
+   */
+  function sheetList(root) {
+    return (
+      root.querySelector(CARD_SHEET_SELECTOR) ??
+      root.querySelector('yt-sheet-view-model yt-list-view-model') ??
+      root.querySelector('yt-list-view-model') ??
+      null
+    );
+  }
 
   let config = {
     enabled: false,
@@ -425,16 +476,18 @@
    * Deal with an ad that is PLAYING in the player.
    *
    * The network rules stop most ads before they load, but YouTube still serves
-   * one from its own origin sometimes. Three moves, in order:
+   * one from its own origin sometimes. Four moves, in order:
    *
-   *  1. click YouTube's own skip control the moment it exists — the honest skip;
-   *  2. dismiss an overlay/banner ad drawn over the video;
-   *  3. for an ad the user cannot dismiss, fast-forward it to its end (and mute
-   *     it while it runs), which is what every ad blocker has to do for an
-   *     unskippable pre-roll.
+   *  1. ask the player to skip, through its own API when the build exposes one;
+   *  2. click YouTube's own skip control the moment it exists — the honest skip;
+   *  3. dismiss an overlay/banner ad drawn over the video;
+   *  4. for an ad the user cannot dismiss, run it out at 16× (and mute it while
+   *     it runs), so an unskippable pre-roll costs a fraction of a second rather
+   *     than its full length. The seek is re-applied on every pass, because the
+   *     player can reset `currentTime` when it hands the element over.
    *
-   * The mute is remembered and undone the moment the ad ends, so it can never
-   * carry over and silence the video the user came to watch.
+   * The mute and the playback rate are remembered and undone the moment the ad
+   * ends, so neither can carry over onto the video the user came to watch.
    */
   function handleVideoAds() {
     const player = document.querySelector('#movie_player, .html5-video-player');
@@ -443,34 +496,90 @@
     const adPlaying = player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting');
 
     if (!adPlaying) {
-      // The ad is over: undo only the mute WE applied.
-      if (video?.dataset.cvAdMuted === '1') video.muted = false;
-      if (video) delete video.dataset.cvAdMuted;
+      // The ad is over: undo only what WE applied.
+      if (video) {
+        if (video.dataset.cvAdMuted === '1') video.muted = false;
+        if (video.dataset.cvAdRate) video.playbackRate = Number(video.dataset.cvAdRate) || 1;
+        delete video.dataset.cvAdMuted;
+        delete video.dataset.cvAdRate;
+      }
       return;
     }
+
+    // A burst of passes while the ad is on screen: one pass per second would let
+    // a three-second unskippable ad play for most of its length before the seek
+    // landed. The burst stops itself as soon as the ad is gone.
+    startAdBurst();
 
     if (video && video.dataset.cvAdMuted === undefined) {
       video.dataset.cvAdMuted = video.muted ? '0' : '1';
       video.muted = true;
     }
 
+    // The build's own API first: UMP exposes `skipAd` on some players, and it
+    // jumps the ad without touching the element's timeline.
+    try {
+      if (typeof player.skipAd === 'function') player.skipAd();
+    } catch {
+      /* not every player build exposes it */
+    }
+
     const overlayClose = player.querySelector(AD_OVERLAY_CLOSE_SELECTOR);
     if (overlayClose && isVisible(overlayClose)) overlayClose.click();
 
-    const skip = player.querySelector(AD_SKIP_SELECTOR);
-    if (skip && isVisible(skip)) {
+    // Click, and keep clicking: the control is inserted a moment after the ad
+    // starts, and a single miss used to leave the ad running to its end.
+    for (const skip of player.querySelectorAll(AD_SKIP_SELECTOR)) {
+      if (!isVisible(skip)) continue;
       skip.click();
-      return;
     }
 
-    // Unskippable: run it out instead of playing it.
-    if (video && Number.isFinite(video.duration) && video.duration > 0.1 && video.currentTime < video.duration - 0.1) {
+    if (!video) return;
+
+    // Run the ad out instead of watching it. The rate is remembered once, and
+    // the seek is re-applied every pass until the player stops showing an ad.
+    if (video.dataset.cvAdRate === undefined) video.dataset.cvAdRate = String(video.playbackRate || 1);
+    try {
+      video.playbackRate = 16;
+    } catch {
+      /* some builds clamp the rate; the seek below still applies */
+    }
+
+    if (Number.isFinite(video.duration) && video.duration > 0.1 && video.currentTime < video.duration - 0.05) {
       try {
         video.currentTime = video.duration;
       } catch {
-        /* a live stream's duration is Infinity; nothing to skip */
+        /* a live stream's duration is Infinity; nothing to seek */
+      }
+    } else if (!Number.isFinite(video.duration)) {
+      // A stitched/live ad has no usable duration, so nudge the timeline forward
+      // in steps instead of jumping to an end that does not exist.
+      try {
+        video.currentTime = Math.min(video.currentTime + 15, 3600);
+      } catch {
+        /* nothing to seek on this element */
       }
     }
+  }
+
+  /** A short, self-cancelling burst of ad passes — see `handleVideoAds`. */
+  let adBurst = null;
+
+  function startAdBurst() {
+    if (adBurst !== null) return;
+    adBurst = window.setInterval(() => {
+      const player = document.querySelector('#movie_player, .html5-video-player');
+      const showing = Boolean(
+        player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))
+      );
+      if (!showing) {
+        window.clearInterval(adBurst);
+        adBurst = null;
+        handleVideoAds();
+        return;
+      }
+      handleVideoAds();
+    }, 120);
   }
 
   /**
@@ -484,7 +593,9 @@
     const video = document.querySelector('#movie_player video, .html5-video-player video');
     if (!video) return;
     if (video.dataset.cvAdMuted === '1') video.muted = false;
+    if (video.dataset.cvAdRate) video.playbackRate = Number(video.dataset.cvAdRate) || 1;
     delete video.dataset.cvAdMuted;
+    delete video.dataset.cvAdRate;
   }
 
   /**
@@ -543,6 +654,30 @@
       (lockup?.getAttribute('title') ?? '').trim() ||
       (lockup?.getAttribute('aria-label') ?? '').trim();
     if (lockupText !== '') return lockupText;
+
+    // A Short, in either place it appears: the reels player's header, and the
+    // Shorts lockup in a feed shelf. Neither carries `#video-title`, so without
+    // this a Shorts title matched nothing and Brain Bot looked switched off on
+    // exactly the content it was meant to filter.
+    //
+    // The desktop player's title is now its own view model (`h1` with
+    // `ytShortsVideoTitleViewModelShortsVideoTitle`); the older
+    // `ytd-reel-player-header-renderer` shape is kept beside it because the
+    // feed still serves it on some surfaces. Reading only the old one left a
+    // live Short's title empty, so a title keyword could never match it.
+    const shortTitle = element.querySelector(
+      'yt-shorts-video-title-view-model h1, h1.ytShortsVideoTitleViewModelShortsVideoTitle, ' +
+        '.ytShortsVideoTitleViewModelShortsVideoTitle, ' +
+        'ytd-reel-player-header-renderer #title, ytd-reel-player-header-renderer .title, ' +
+        'ytd-reel-player-header-renderer h2, ytd-reel-player-header-renderer h3, ' +
+        '.shortsLockupViewModelHostMetadataTitle, h3.shortsLockupViewModelHostMetadataTitle, ' +
+        '.reel-player-header-renderer-title'
+    );
+    const shortText =
+      (shortTitle?.textContent ?? '').trim() ||
+      (shortTitle?.getAttribute('title') ?? '').trim() ||
+      (shortTitle?.getAttribute('aria-label') ?? '').trim();
+    if (shortText !== '') return shortText;
 
     // A CHANNEL result has no video title; its name is its title, and the card
     // is judged by the channel link it carries.
@@ -709,7 +844,13 @@
    */
   function cardElementFor(node) {
     if (!node?.closest) return null;
-    return node.closest(CARD_SELECTOR) ?? node.closest(LOCKUP_CARD_SELECTOR);
+    return (
+      node.closest(CARD_SELECTOR) ??
+      node.closest(LOCKUP_CARD_SELECTOR) ??
+      // A Short in a feed SHELF is a lockup with no renderer around it either,
+      // so without this its ⋮ and right-click had no card to record.
+      node.closest(SHORTS_LOCKUP_SELECTOR)
+    );
   }
 
   /**
@@ -724,6 +865,14 @@
     const elements = [...document.querySelectorAll(CARD_SELECTOR)];
     for (const lockup of document.querySelectorAll(LOCKUP_CARD_SELECTOR)) {
       if (!lockup.closest(CARD_SELECTOR)) elements.push(lockup);
+    }
+    // Shorts in a feed shelf (`ytm-shorts-lockup-view-model`) are neither a
+    // renderer nor a `yt-lockup-view-model`, so they were never judged at all:
+    // a blocked channel's Shorts kept showing, and the overlay never appeared
+    // on them. They are still skipped when a known card already wraps them, so
+    // one Short is never evaluated twice.
+    for (const short of document.querySelectorAll(SHORTS_LOCKUP_SELECTOR)) {
+      if (!short.closest(CARD_SELECTOR) && !short.closest(LOCKUP_CARD_SELECTOR)) elements.push(short);
     }
     return elements;
   }
@@ -770,6 +919,13 @@
 
   /** Forget every decision and restore the original cards. */
   function reset() {
+    // Turning protection off mid-hover must release the page-wide hover lock and
+    // its burst too, or previews would stay suppressed with nothing blocking.
+    document.documentElement.classList.remove(PROTECTED_HOVER_CLASS);
+    if (hoverBurst !== null) {
+      window.clearInterval(hoverBurst);
+      hoverBurst = null;
+    }
     for (const element of cardElements()) restoreCard(element);
   }
 
@@ -785,17 +941,410 @@
    * that moment, and the user is usually on the video page when they block.
    */
   function decidedByCurrentRules(element) {
-    return handled.get(element)?.revision === config.revision;
+    const record = handled.get(element);
+    if (!record || record.revision !== config.revision) return false;
+    // The record says what this script DECIDED, not what the page currently
+    // shows. YouTube re-stamps and re-attaches whole feed subtrees, and that
+    // takes our overlay — or the display we set to none — with it. Trusting the
+    // record alone is how a card reported itself as handled while the page
+    // showed it unlocked: the overlay was built, wiped by a re-render, and never
+    // rebuilt, because every later scan believed it was still there. A decision
+    // is therefore only still in force while its EFFECT is still on the page.
+    if (record.mode === 'overlay') return Boolean(record.overlay?.isConnected);
+    if (record.mode === 'remove') return element.style.display === 'none';
+    return true;
+  }
+
+  /**
+   * The element an overlay may safely cover — the THUMBNAIL, never the card.
+   *
+   * The selector list alone cannot guarantee that. YouTube has served shapes
+   * where an `a#thumbnail`-named element wrapped the whole lockup (image AND
+   * title), and when a card matched none of the selectors the old fallback
+   * covered the CARD — which is exactly the title disappearing under the
+   * overlay. Three steps, in order:
+   *
+   *  1. the known thumbnail containers, skipping any that holds the card's
+   *     title;
+   *  2. the box around the card's IMG, which is the thumbnail by construction;
+   *  3. the card itself, drawn as a compact banner instead of a full cover.
+   */
+  function thumbnailHost(card) {
+    // A Short in the reels player has no thumbnail: its “thumbnail” is the
+    // player itself, so the cover belongs over the whole video rather than in
+    // the compact banner fallback below.
+    if (card.localName === 'ytd-reel-video-renderer') {
+      const player = card.querySelector('#player, ytd-player, .html5-video-player');
+      return { host: player ?? card, banner: false };
+    }
+
+    for (const candidate of card.querySelectorAll(THUMBNAIL_SELECTOR)) {
+      // An `img` is a replaced element: children appended to it are never
+      // painted, so a selector that lands on the image itself has to be skipped
+      // for the box around it.
+      if (candidate === card || candidate.localName === 'img') continue;
+      if (
+        candidate.matches?.(
+          '#video-title, a#video-title, #video-title-link, .ytLockupMetadataViewModelTitle, h3'
+        )
+      )
+        continue;
+      if (containsTitle(candidate)) continue;
+      return { host: candidate, banner: false };
+    }
+
+    const image = card.querySelector('img.yt-core-image, img');
+    if (image) {
+      const parent = image.parentElement;
+      if (parent && parent !== card && !containsTitle(parent)) return { host: parent, banner: false };
+      const linked = image.closest(
+        'a#thumbnail, a[href^="/watch"], yt-thumbnail-view-model, yt-image, ytd-thumbnail'
+      );
+      if (linked && linked !== card && !containsTitle(linked)) return { host: linked, banner: false };
+    }
+
+    return { host: card, banner: true };
+  }
+
+  /** Does this element hold the card's title? Then it is not a thumbnail. */
+  function containsTitle(node) {
+    return Boolean(
+      node.querySelector?.(
+        '#video-title, a#video-title, #video-title-link, .ytLockupMetadataViewModelTitle, h3'
+      )
+    );
+  }
+
+  /**
+   * The surfaces YouTube uses to play a muted hover preview.
+   *
+   * There is no single element to hide: the inline preview has shipped as
+   * `ytd-video-preview`, as `#inline-preview-player`, and as a bare `video`
+   * inside `ytd-moving-thumbnail-renderer`. Matching the `video` itself is what
+   * makes the guard survive the next rename — inside a protected CARD, any video
+   * is a preview, never the player.
+   */
+  const PREVIEW_SURFACE_SELECTOR =
+    'ytd-video-preview, ytd-moving-thumbnail-renderer, #inline-preview-player, #mouseover-overlay, .ytp-inline-preview-mode';
+
+  /**
+   * Stop a hover preview dead, in a card this script has covered.
+   *
+   * Hiding the thumbnail's hover surface is not enough on its own: a preview
+   * YouTube already started keeps playing its element even when it is not
+   * painted, so the video is paused as well. Returns whether anything was found,
+   * which is what lets the caller skip the work on a card with no preview.
+   */
+  function stopHoverPreview(card) {
+    let found = false;
+    for (const surface of card.querySelectorAll(PREVIEW_SURFACE_SELECTOR)) {
+      surface.style.display = 'none';
+      found = true;
+    }
+    for (const video of card.querySelectorAll('video')) {
+      found = true;
+      try {
+        video.pause();
+        video.muted = true;
+        video.removeAttribute('autoplay');
+      } catch {
+        /* the node can be replaced mid-teardown by a SPA navigation */
+      }
+    }
+    return found;
+  }
+
+  /**
+   * Put a cover back when YouTube has taken it away.
+   *
+   * Hovering a card makes YouTube replace the thumbnail's contents with its
+   * preview player — and that replacement takes our cover with it. The card is
+   * still the one we decided about, so the verdict is kept on its record and the
+   * cover is rebuilt from it in place, before the next scan round-trip.
+   */
+  function reassertOverlay(card) {
+    const record = handled.get(card);
+    if (!record || record.mode !== 'overlay' || !record.verdict) return;
+    if (record.overlay?.isConnected) return;
+    let overlay = card.querySelector(`.${OVERLAY_CLASS}`);
+    if (!overlay) overlay = buildOverlay(card, record.verdict);
+    record.overlay = overlay;
+  }
+
+  /** Sweep every protected card: stop any preview and restore a missing cover. */
+  function guardHoverPreviews() {
+    for (const card of document.querySelectorAll('[data-cv-protected]')) {
+      stopHoverPreview(card);
+      reassertOverlay(card);
+    }
+  }
+
+  /**
+   * A page-wide hover lock, active while the pointer is over a protected card.
+   *
+   * YouTube does not always keep the inline preview inside the card it belongs
+   * to — it can hang it off the page — so hiding only the card's own surfaces
+   * missed it, the preview kept playing, and the hover wiped the cover. While a
+   * protected card is hovered this hides and pauses EVERY known preview surface
+   * on the page, and restores the cover if the hover removed it.
+   */
+  const PROTECTED_HOVER_CLASS = 'cv-protected-hover';
+  let hoverBurst = null;
+
+  function stopPagePreviews() {
+    for (const surface of document.querySelectorAll(PREVIEW_SURFACE_SELECTOR)) {
+      surface.style.display = 'none';
+    }
+    for (const video of document.querySelectorAll(
+      'ytd-video-preview video, ytd-moving-thumbnail-renderer video, #inline-preview-player video, video.ytp-inline-preview-mode'
+    )) {
+      try {
+        video.pause();
+        video.muted = true;
+      } catch {
+        /* the element can be replaced mid-teardown */
+      }
+    }
+  }
+
+  /** Undo the inline hides, but never un-hide a surface inside a protected card. */
+  function releasePagePreviews() {
+    for (const surface of document.querySelectorAll(PREVIEW_SURFACE_SELECTOR)) {
+      if (!surface.closest('[data-cv-protected]')) surface.style.display = '';
+    }
+  }
+
+  /**
+   * A fast pass for the length of the hover.
+   *
+   * The preview is created a moment AFTER the pointer arrives, so a single check
+   * on `mouseover` is too early. 120 ms is fast enough that a preview is caught
+   * as it appears, and the interval cancels itself the moment the pointer
+   * leaves.
+   */
+  function startHoverBurst() {
+    if (hoverBurst !== null) return;
+    hoverBurst = window.setInterval(() => {
+      if (!document.documentElement.classList.contains(PROTECTED_HOVER_CLASS)) {
+        window.clearInterval(hoverBurst);
+        hoverBurst = null;
+        return;
+      }
+      stopPagePreviews();
+      for (const card of document.querySelectorAll('[data-cv-protected]')) {
+        reassertOverlay(card);
+        stopHoverPreview(card);
+      }
+    }, 120);
+  }
+
+  function setProtectedHover(on) {
+    document.documentElement.classList.toggle(PROTECTED_HOVER_CLASS, Boolean(on));
+    if (on) {
+      stopPagePreviews();
+      startHoverBurst();
+    } else {
+      releasePagePreviews();
+    }
+  }
+
+  /** The reason line shared by the thumbnail overlay and the player block. */
+  function reasonText(verdict) {
+    return verdict.matchedItem
+      ? `Matched “${verdict.matchedItem}”`
+      : 'Matched one of your filters';
+  }
+
+  /**
+   * The video open on this page, canonicalised, or null on any other page.
+   *
+   * A false-positive report is only actionable if the administrator can watch
+   * the video, and a channel name alone does not say WHICH video was wrongly
+   * blocked. Canonicalised to `watch?v=ID` so a tracking parameter or a playlist
+   * index never becomes part of the report.
+   */
+  function currentVideoUrl() {
+    if (location.pathname !== '/watch') return null;
+    try {
+      const id = new URL(location.href).searchParams.get('v');
+      return id ? `${location.origin}/watch?v=${encodeURIComponent(id)}` : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The report's detail line.
+   *
+   * `detail` is the one free-text field the reports endpoint already accepts,
+   * so the video travels there rather than in a new property the backend's
+   * strict request schema would refuse. The labelled format is what the admin
+   * dashboard parses back into a clickable link and a channel heading.
+   */
+  function reportDetail({ videoUrl, title, channel }) {
+    const parts = [];
+    if (videoUrl) parts.push(`Video: ${videoUrl}`);
+    if (title) parts.push(`Title: ${String(title).slice(0, 160)}`);
+    if (channel) parts.push(`Channel: ${String(channel).slice(0, 120)}`);
+    parts.push('Reported from the ClearView YouTube overlay');
+    return parts.join(' | ');
+  }
+
+  /**
+   * The "this was a mistake" action, on the blocked player.
+   *
+   * A block the user cannot account for has to be answerable where they see it;
+   * routing them to a settings page to find a rule they do not know the name of
+   * is not. It lives on the WATCH page rather than on the feed cover: the feed is
+   * a signpost, and the page with the video is where a report can be judged. It
+   * sends the matched rule — and the video — to the existing false-positive
+   * endpoint, counted for review, never acted on automatically.
+   */
+  function buildReportButton(verdict, context = {}) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `${OVERLAY_CLASS}__report`;
+    button.textContent = 'Report false positive';
+    if (!verdict.matchedItem) {
+      button.hidden = true;
+      return button;
+    }
+    button.addEventListener('click', (event) => {
+      // The button sits inside a link on most cards, so both are needed: the
+      // default would navigate to the video instead of reporting.
+      event.preventDefault();
+      event.stopPropagation();
+      void reportFalsePositive(verdict, button, context);
+    });
+    return button;
+  }
+
+  async function reportFalsePositive(verdict, button, context = {}) {
+    const response = await send('report/create', {
+      kind: verdict.via === 'channel' ? 'channel' : 'keyword',
+      value: verdict.matchedItem,
+      detail: reportDetail(context),
+    });
+    if (!response?.ok) {
+      showToast(errorText(response, 'ClearView could not send that report.'));
+      return;
+    }
+    button.textContent = 'Reported — thanks';
+    button.disabled = true;
+  }
+
+  /**
+   * The verdict carried from a covered thumbnail to the video page.
+   *
+   * The click already knows WHY the card was blocked, but the watch page starts
+   * loading before the worker can be asked again — long enough for the video to
+   * begin playing. Handing the verdict over in sessionStorage closes that gap:
+   * the next watch page blocks the player immediately, then confirms with the
+   * worker. One-shot and short-lived, so it can never leak into a later video.
+   */
+  const PENDING_BLOCK_KEY = 'cv.pendingBlock';
+
+  function rememberPendingBlock(href, verdict) {
+    try {
+      sessionStorage.setItem(
+        PENDING_BLOCK_KEY,
+        JSON.stringify({
+          href,
+          matchedItem: verdict.matchedItem ?? null,
+          via: verdict.via ?? null,
+          at: Date.now(),
+        })
+      );
+    } catch {
+      /* storage unavailable — the worker check still runs on the next page */
+    }
+  }
+
+  /** Consume the hand-off, if it belongs to the video now open. */
+  function takePendingBlock() {
+    try {
+      const raw = sessionStorage.getItem(PENDING_BLOCK_KEY);
+      if (!raw) return null;
+      sessionStorage.removeItem(PENDING_BLOCK_KEY);
+      const data = JSON.parse(raw);
+      if (!data || Date.now() - Number(data.at) > 15_000) return null;
+      const wanted = new URL(data.href, location.origin).searchParams.get('v');
+      const current = new URL(location.href).searchParams.get('v');
+      if (!wanted || !current || wanted !== current) return null;
+      if (!data.matchedItem && !data.via) return null;
+      return { blocked: true, matchedItem: data.matchedItem, via: data.via };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Draw the block on a card's thumbnail.
+   *
+   * Only the thumbnail is covered, so the title and byline stay readable. A
+   * click on the block opens the video like any other click would — the video
+   * page is where playback is stopped (`applyPlayerBlock`), which is what keeps
+   * the description and comments available.
+   */
+  function buildOverlay(element, verdict) {
+    const { host, banner } = thumbnailHost(element);
+
+    const overlay = document.createElement('div');
+    overlay.className = banner ? `${OVERLAY_CLASS} ${OVERLAY_CLASS}--banner` : OVERLAY_CLASS;
+
+    const label = document.createElement('div');
+    label.className = `${OVERLAY_CLASS}__label`;
+    label.textContent = 'Blocked by ClearView';
+
+    const reason = document.createElement('div');
+    reason.className = `${OVERLAY_CLASS}__reason`;
+    reason.textContent = reasonText(verdict);
+
+    // The FEED cover is a signpost, not a form: it names the block and opens the
+    // video. Reporting belongs where the video itself is — on the watch page,
+    // over the player — so the feed stays one clear sentence with one action.
+    overlay.append(label, reason);
+
+    // Where the overlay is inside a link, YouTube's own navigation handles the
+    // click. Where it is not (a `ytd-thumbnail` wrapper), the card's thumbnail
+    // link has to be followed explicitly.
+    overlay.addEventListener('click', () => {
+      const link =
+        overlay.closest('a[href]') ?? element.querySelector('a#thumbnail[href], a[href^="/watch"]');
+      if (!link) return;
+      // Tell the next page what this click already knew, so the video does not
+      // get a moment of playback while the worker is asked again.
+      rememberPendingBlock(link.href, verdict);
+      // Inside a link, YouTube's own navigation follows; outside one (a
+      // `ytd-thumbnail` wrapper), the card's link has to be followed explicitly.
+      if (!overlay.closest('a[href]')) link.click();
+    });
+
+    if (!banner) host.style.position = host.style.position || 'relative';
+    host.appendChild(overlay);
+    return overlay;
+  }
+
+  /** Stop the video inside a covered Short, and keep it muted. */
+  function pauseShortPlayback(reel) {
+    for (const video of reel.querySelectorAll('video')) {
+      try {
+        video.pause();
+        video.muted = true;
+      } catch {
+        /* the element can be replaced while the player swaps Shorts */
+      }
+    }
   }
 
   function applyProtection(element, verdict) {
     const record = handled.get(element) ?? {};
 
-    // A channel the user blocked BY HAND is removed outright, whatever the Brain
-    // Bot display mode says. The mode exists to choose how a keyword match is
-    // presented; it has no business leaving a channel the user asked to be rid
-    // of on the page under an overlay.
-    const remove = verdict.via === 'channel' || config.brainBotMode === 'remove';
+    // Both a keyword match and a blocked channel follow the SAME display mode.
+    // Forcing channels to be removed made the overlay appear for keywords but
+    // not for the channel the user had just blocked — the card vanished before
+    // the reason could be read, and there was nothing left to report.
+    const remove = config.brainBotMode === 'remove';
     record.mode = remove ? 'remove' : 'overlay';
 
     if (record.mode === 'remove') {
@@ -813,31 +1362,83 @@
         record.hidden = false;
       }
       // Reuse an overlay this script already drew (a mode switch re-enters here)
-      // so a card can never end up covered twice.
-      if (!record.overlay) {
+      // so a card can never end up covered twice — and rebuild it when the page
+      // has thrown the old one away with the rest of the card's markup.
+      if (!record.overlay || !record.overlay.isConnected) {
         let overlay = element.querySelector(`.${OVERLAY_CLASS}`);
-        if (!overlay) {
-          overlay = document.createElement('div');
-          overlay.className = OVERLAY_CLASS;
-          const label = document.createElement('div');
-          label.className = `${OVERLAY_CLASS}__label`;
-          label.textContent = 'Protected by ClearView';
-          const reason = document.createElement('div');
-          reason.className = `${OVERLAY_CLASS}__reason`;
-          reason.textContent = verdict.matchedItem ? `Blocked: ${verdict.matchedItem}` : 'Hidden content';
-          overlay.append(label, reason);
-          element.style.position = element.style.position || 'relative';
-          element.appendChild(overlay);
-        }
+        if (!overlay) overlay = buildOverlay(element, verdict);
         record.overlay = overlay;
       }
+      // The card may have started a hover preview before (or while) it was
+      // covered; a preview that keeps playing behind the cover is still playback.
+      stopHoverPreview(element);
+      // A Short is already PLAYING when it is covered. A cover over a playing
+      // video is not a block, so the element is paused as well — and the play
+      // guard below keeps it paused.
+      if (element.localName === 'ytd-reel-video-renderer') pauseShortPlayback(element);
     }
 
+    // Kept on the record so a hover that wipes the cover can rebuild it without
+    // another worker round-trip — the verdict is already decided.
+    record.verdict = verdict;
     element.setAttribute('data-cv-protected', verdict.via ?? 'feed');
     // Stamped with the rules it was decided under, so a later rules change makes
     // this decision stale rather than permanent.
     record.revision = config.revision;
     handled.set(element, record);
+  }
+
+  /**
+   * Verdicts already decided under the current rules.
+   *
+   * A feed repeats the same title and channel across many cards, and the same
+   * card is re-rendered as the page scrolls. Asking the worker about an identity
+   * it has already judged is pure traffic, so the answer is remembered for as
+   * long as the rules fingerprint stays the same. `refresh()` empties it when the
+   * fingerprint changes.
+   */
+  const verdictCache = new Map();
+  const VERDICT_CACHE_LIMIT = 800;
+
+  function cardCacheKey(card) {
+    return `${card.title ?? ''}\u0000${card.channel ?? ''}\u0000${card.channelUrl ?? ''}`;
+  }
+
+  /**
+   * Is this card close enough to the viewport to be worth judging?
+   *
+   * The feed can hold hundreds of cards; evaluating all of them on every pass is
+   * what made the worker the bottleneck. Off-screen cards are left undecided and
+   * picked up when the scroll pass brings them near — with a generous margin so a
+   * card cannot enter view before its verdict lands.
+   */
+  function nearViewport(element) {
+    if (typeof element.getBoundingClientRect !== 'function') return true;
+    const rect = element.getBoundingClientRect();
+    const margin = 600;
+    const height = window.innerHeight || 0;
+    return rect.bottom >= -margin && rect.top <= height + margin;
+  }
+
+  /** Judge a card from the cache, if it has one. Returns true when it did. */
+  function applyCachedVerdict(element, card) {
+    const cached = verdictCache.get(cardCacheKey(card));
+    if (!cached) return false;
+    if (cached.verdict) {
+      applyProtection(element, cached.verdict);
+    } else if (card.title !== '') {
+      restoreCard(element);
+      handled.set(element, { mode: 'clean', revision: config.revision });
+    } else {
+      return false;
+    }
+    return true;
+  }
+
+  /** Remember a verdict, keeping the map bounded over a long session. */
+  function rememberVerdict(card, verdict) {
+    if (verdictCache.size >= VERDICT_CACHE_LIMIT) verdictCache.clear();
+    verdictCache.set(cardCacheKey(card), { verdict: verdict ?? null });
   }
 
   /**
@@ -863,7 +1464,11 @@
     const payload = [];
     for (const element of elements) {
       if (decidedByCurrentRules(element)) continue;
+      // Only cards near the viewport are judged: the rest are left undecided and
+      // picked up by the scroll pass (see `nearViewport`).
+      if (!nearViewport(element)) continue;
       const card = readCard(element);
+      if (applyCachedVerdict(element, card)) continue;
       pending.push(element);
       payload.push(card);
     }
@@ -882,6 +1487,7 @@
         const verdict = verdicts.get(i);
         if (verdict) {
           applyProtection(element, verdict);
+          rememberVerdict(card, verdict);
         } else if (card.title !== '') {
           // A card with a channel link but no title yet is still worth marking
           // only once the title is known, so a lazy title is never missed.
@@ -892,6 +1498,7 @@
           // in the other direction.
           restoreCard(element);
           handled.set(element, { mode: 'clean', revision: config.revision });
+          rememberVerdict(card, null);
         }
         // else: no title yet — left unhandled for the next pass.
       });
@@ -1006,12 +1613,27 @@
    * that follows a click on a card's own trigger.
    */
   function findOpenCardMenu() {
+    // Its usual home, plus the Shorts player: a Short's menu is rendered inside
+    // the reels component on some builds rather than in the document-level
+    // popup container. The time window after the click is what makes looking
+    // wider safe — the menu that just opened is the one that was clicked.
+    const dropdowns = document.querySelectorAll(
+      'ytd-popup-container tp-yt-iron-dropdown, ytd-reel-video-renderer tp-yt-iron-dropdown, ytd-shorts tp-yt-iron-dropdown, tp-yt-iron-dropdown'
+    );
+    const dropdown =
+      [...dropdowns].find(
+        (candidate) =>
+          isVisible(candidate) &&
+          (sheetList(candidate) ||
+            candidate.querySelector('ytd-menu-popup-renderer') ||
+            candidate.querySelector('yt-sheet-view-model'))
+      ) ?? null;
+    if (dropdown) return dropdown;
+
+    // Some Shorts builds open the list itself with no dropdown wrapper.
     return (
-      [...document.querySelectorAll('ytd-popup-container tp-yt-iron-dropdown')].find(
-        (dropdown) =>
-          isVisible(dropdown) &&
-          (dropdown.querySelector(CARD_SHEET_SELECTOR) ||
-            dropdown.querySelector('ytd-menu-popup-renderer'))
+      [...document.querySelectorAll('ytd-menu-popup-renderer, yt-sheet-view-model, yt-list-view-model[role="menu"]')].find(
+        isVisible
       ) ?? null
     );
   }
@@ -1030,11 +1652,12 @@
    */
   function menuItemsContainer(dropdown) {
     return (
-      dropdown.querySelector(CARD_SHEET_SELECTOR) ??
+      sheetList(dropdown) ??
       dropdown.querySelector('ytd-menu-popup-renderer #items') ??
       dropdown.querySelector('#items') ??
       dropdown.querySelector('tp-yt-paper-listbox') ??
       dropdown.querySelector('ytd-menu-popup-renderer') ??
+      dropdown.querySelector('yt-sheet-view-model') ??
       null
     );
   }
@@ -1186,9 +1809,27 @@
    */
   function pageChannelTarget() {
     if (location.pathname === '/watch') return watchChannelIdentity();
+    if (location.pathname.startsWith('/shorts')) return shortsPageTarget();
     if (!isChannelPagePath(location.pathname)) return null;
     const name = channelPageName();
     return { url: location.href, name: name === '' ? null : name };
+  }
+
+  /**
+   * The channel of the Short on screen.
+   *
+   * A `/shorts/<id>` URL names no channel. The reel on screen names it in its
+   * header; when the header has not rendered yet the page's own player response
+   * still carries the channel id, which is the same fallback the watch page uses.
+   */
+  function shortsPageTarget() {
+    const reels = [...document.querySelectorAll('ytd-reel-video-renderer')];
+    const visible =
+      reels.find((reel) => {
+        const rect = reel.getBoundingClientRect();
+        return rect.height > 0 && rect.bottom > 0 && rect.top < (window.innerHeight || 0);
+      }) ?? reels[0];
+    return (visible ? cardChannelTarget(visible) : null) ?? watchIdentityFromPlayerResponse();
   }
 
   /**
@@ -1293,37 +1934,188 @@
   }
 
   /**
-   * Ask the worker about the channel this page is showing.
+   * Ask the worker about the channel a CHANNEL page is showing.
    *
-   * A `/watch` page names no channel, so the video's own channel is read off the
-   * page. A CHANNEL page names it in the URL, which the worker's navigation
-   * evaluator already checks — and its NAME is sent as well, which is what makes
-   * a name-only block cover the page. A Shorts page is the Shorts control's
-   * business. The redirect belongs to the worker either way: a page cannot
-   * navigate itself to a `chrome-extension://` URL, so there is nothing to apply
-   * here.
+   * A channel page names it in the URL, which the worker's navigation evaluator
+   * already checks — and its NAME is sent as well, which is what makes a
+   * name-only block cover the page. A Shorts page is the Shorts control's
+   * business. The redirect belongs to the worker: a page cannot navigate itself
+   * to a `chrome-extension://` URL, so there is nothing to apply here.
+   *
+   * A `/watch` page is deliberately NOT redirected any more. It is blocked IN
+   * PLACE by `checkBlockedVideo`/`applyPlayerBlock`, so the video does not play
+   * while its description and comments remain readable — the same rule a feed
+   * thumbnail promises when it is clicked.
    */
   async function enforcePageChannel() {
     if (!config.enabled || config.blockedChannelCount === 0) return;
+    if (!isChannelPagePath(location.pathname)) return;
 
     const url = location.href;
     if (url === lastCheckedPageUrl) return;
 
-    if (location.pathname === '/watch') {
-      const identity = watchChannelIdentity();
-      // The metadata renders after the player does, so a miss here is normal and
-      // must NOT be recorded as "checked" — the next mutation tries again.
-      if (!identity) return;
-      lastCheckedPageUrl = url;
-      await send('channel/check', identity);
-      return;
-    }
-
-    if (!isChannelPagePath(location.pathname)) return;
     const name = channelPageName();
     if (name === '') return;
     lastCheckedPageUrl = url;
     await send('channel/check', { url, name });
+  }
+
+  // ── A blocked VIDEO, blocked in place ──────────────────────────────────
+
+  const PLAYER_BLOCK_CLASS = 'cv-player-block';
+  const VIDEO_BLOCKED_CLASS = 'cv-video-blocked';
+
+  /** The title of the video being watched, from the page or its metadata. */
+  function readWatchTitle() {
+    const named = document.querySelector(
+      'ytd-watch-metadata h1 yt-formatted-string, ytd-watch-metadata h1, #title h1 yt-formatted-string, #title h1'
+    );
+    const text = (named?.textContent ?? '').trim();
+    if (text !== '') return text;
+    return (document.querySelector('meta[property="og:title"]')?.getAttribute('content') ?? '')
+      .replace(/\s*[-–]\s*YouTube\s*$/i, '')
+      .trim();
+  }
+
+  /**
+   * Stop the player, but leave the page alone.
+   *
+   * The video itself is paused and hidden behind a block panel, while the watch
+   * page around it — description, channel, comments — stays exactly where it is.
+   * This is the difference between "this video is blocked" and "this page is
+   * blocked": the user can still read the comments and decide whether the block
+   * was wrong, which is the whole point of the report button on the panel.
+   */
+  function applyPlayerBlock(verdict) {
+    const player = document.querySelector('#movie_player, .html5-video-player');
+    if (!player) return false;
+
+    document.documentElement.classList.add(VIDEO_BLOCKED_CLASS);
+    if (!player.style.position) player.style.position = 'relative';
+
+    let overlay = player.querySelector(`.${PLAYER_BLOCK_CLASS}`);
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.className = PLAYER_BLOCK_CLASS;
+      const label = document.createElement('div');
+      label.className = `${PLAYER_BLOCK_CLASS}__label`;
+      label.textContent = 'Blocked by ClearView';
+      const reason = document.createElement('div');
+      reason.className = `${PLAYER_BLOCK_CLASS}__reason`;
+      const note = document.createElement('div');
+      note.className = `${PLAYER_BLOCK_CLASS}__note`;
+      note.textContent = 'The video is paused. Comments and the description are still below.';
+      overlay.append(label, reason, note);
+      player.appendChild(overlay);
+    }
+
+    // Only redraw the content when the verdict changed. This function runs on
+    // every debounced mutation pass, and rewriting the panel each time would
+    // add DOM, fire the observer, and re-enter the same pass forever.
+    const stamp = `${verdict.via ?? ''}|${verdict.matchedItem ?? ''}`;
+    if (overlay.dataset.cvStamp !== stamp) {
+      overlay.dataset.cvStamp = stamp;
+      overlay.querySelector(`.${PLAYER_BLOCK_CLASS}__reason`).textContent = reasonText(verdict);
+      const report = buildReportButton(verdict, {
+        videoUrl: currentVideoUrl(),
+        title: readWatchTitle(),
+        channel: watchChannelIdentity()?.name ?? null,
+      });
+      report.classList.add(`${PLAYER_BLOCK_CLASS}__report`);
+      overlay.querySelector(`.${PLAYER_BLOCK_CLASS}__report`)?.remove();
+      overlay.append(report);
+    }
+
+    const video = player.querySelector('video');
+    if (video) {
+      try {
+        video.pause();
+      } catch {
+        /* the element can be mid-replacement on a SPA navigation */
+      }
+    }
+    return true;
+  }
+
+  function clearPlayerBlock() {
+    document.documentElement.classList.remove(VIDEO_BLOCKED_CLASS);
+    for (const overlay of document.querySelectorAll(`.${PLAYER_BLOCK_CLASS}`)) overlay.remove();
+  }
+
+  /** The last watch page the worker answered about, so it is checked once. */
+  let checkedVideoKey = null;
+  let videoVerdict = null;
+
+  /**
+   * Ask the worker whether the video being watched is blocked, and stop it if so.
+   *
+   * The same evaluator as the feed, in the worker: a title match (Brain Bot on)
+   * or a blocked channel — which is how a thumbnail that was clicked still lands
+   * on a page whose video will not play.
+   */
+  async function checkBlockedVideo() {
+    // Nothing could match: no Protection, no keyword filter and no blocked
+    // channels. Asking the worker on every watch page would be traffic with a
+    // known answer.
+    if (!config.enabled || (!config.brainBotEnabled && config.blockedChannelCount === 0)) {
+      clearPlayerBlock();
+      checkedVideoKey = null;
+      videoVerdict = null;
+      return;
+    }
+    if (location.pathname !== '/watch') {
+      if (checkedVideoKey !== null) {
+        checkedVideoKey = null;
+        videoVerdict = null;
+        clearPlayerBlock();
+      }
+      return;
+    }
+
+    const title = readWatchTitle();
+    const identity = watchChannelIdentity();
+    // The metadata renders after the player, so a miss is normal: leave the key
+    // unset and let the next mutation try again rather than caching "clean".
+    if (!title && !identity) return;
+
+    const key = `${location.pathname}${location.search}|${title}|${identity?.url ?? ''}`;
+    if (key === checkedVideoKey) {
+      if (videoVerdict) applyPlayerBlock(videoVerdict);
+      return;
+    }
+
+    checkedVideoKey = key;
+    videoVerdict = null;
+    clearPlayerBlock();
+
+    // Optimistic first, from the card the user clicked; confirmed below.
+    const pending = takePendingBlock();
+    if (pending) {
+      videoVerdict = pending;
+      applyPlayerBlock(pending);
+    }
+
+    const response = await send('video/check', {
+      title,
+      channel: identity?.name ?? null,
+      channelUrl: identity?.url ?? null,
+    });
+    // The page may have changed while the worker was answering; an old verdict
+    // must never pause the video the user is now watching.
+    if (checkedVideoKey !== key) return;
+    if (!response?.ok) {
+      checkedVideoKey = null;
+      return;
+    }
+    if (!response.data?.blocked) {
+      // The optimistic hand-off was wrong (the rule was removed in between):
+      // undo it rather than leaving a playable video covered.
+      videoVerdict = null;
+      clearPlayerBlock();
+      return;
+    }
+    videoVerdict = response.data;
+    applyPlayerBlock(response.data);
   }
 
   // ── The card the user last right-clicked ───────────────────────────────
@@ -1402,7 +2194,9 @@
       // the user browses, so one debounced pass keeps them all correct.
       applyShorts();
       applyAds();
+      guardHoverPreviews();
       void scan();
+      void checkBlockedVideo();
       maybeInjectMenuItem();
       void enforcePageChannel();
     }, 200);
@@ -1416,10 +2210,20 @@
     // The worker's fingerprint covers the toggles AND the rules, so a new
     // keyword, a newly blocked channel and a mode switch all land here — the
     // three things that change what a card should look like.
-    if (previous !== '' && config.revision !== previous) reset();
+    if (previous !== '' && config.revision !== previous) {
+      verdictCache.clear();
+      reset();
+      // The video on screen was judged under the old rules: check it again, or
+      // blocking its channel from the ⋮ menu would leave it playing.
+      checkedVideoKey = null;
+      videoVerdict = null;
+      clearPlayerBlock();
+    }
     applyShorts();
     applyAds();
+    guardHoverPreviews();
     await scan();
+    void checkBlockedVideo();
     void enforcePageChannel();
   }
 
@@ -1450,6 +2254,85 @@
     true
   );
 
+  // YouTube starts a muted hover preview the moment the pointer rests on a
+  // thumbnail — including one this script has covered. Stopped here in the
+  // capture phase, as the pointer arrives, rather than only on the next debounced
+  // mutation pass: the preview would otherwise get a fraction of a second of
+  // playback before the sweep caught it.
+  document.addEventListener(
+    'mouseover',
+    (event) => {
+      const card = event.target?.closest?.('[data-cv-protected]');
+      if (!card) return;
+      reassertOverlay(card);
+      stopHoverPreview(card);
+      setProtectedHover(true);
+    },
+    true
+  );
+
+  // Leaving the card ends the hover lock. `relatedTarget` still inside another
+  // protected card means the pointer is only moving between its children.
+  document.addEventListener(
+    'mouseout',
+    (event) => {
+      const card = event.target?.closest?.('[data-cv-protected]');
+      if (!card) return;
+      const next = event.relatedTarget;
+      if (next?.closest?.('[data-cv-protected]')) return;
+      setProtectedHover(false);
+    },
+    true
+  );
+
+  // A hover preview may not play, wherever YouTube puts it.
+  //
+  // The hover lock and the sweeps hide the surfaces, but a preview created after
+  // the pointer stops moving could still start between passes. `play` does not
+  // bubble, so this listens in the capture phase and stops the element at the
+  // moment it starts. It is scoped deliberately: inside a protected card at any
+  // time, or anywhere on the page while a protected card is hovered — an
+  // ordinary card's preview, with no block in sight, is left alone. The real
+  // player is never touched.
+  document.addEventListener(
+    'play',
+    (event) => {
+      const video = event.target;
+      if (!video || video.tagName !== 'VIDEO') return;
+      // A covered Short may live inside a player element that is also named
+      // `#movie_player`; its own reel decides, so it is checked first.
+      const protectedReel = video.closest('ytd-reel-video-renderer[data-cv-protected]');
+      if (!protectedReel && video.closest('#movie_player')) return;
+      const insideProtected = protectedReel ?? video.closest('[data-cv-protected]');
+      const hoverLock = document.documentElement.classList.contains(PROTECTED_HOVER_CLASS);
+      if (!insideProtected && !(hoverLock && video.closest(PREVIEW_SURFACE_SELECTOR))) return;
+      try {
+        video.pause();
+        video.muted = true;
+      } catch {
+        /* the element is being replaced mid-teardown */
+      }
+    },
+    true
+  );
+
+  // A video that is blocked must stay paused even if YouTube or the user asks it
+  // to play again. `play` does not bubble, so this listens in the CAPTURE phase
+  // on the document, where the event still passes on its way down.
+  document.addEventListener(
+    'play',
+    (event) => {
+      if (!document.documentElement.classList.contains(VIDEO_BLOCKED_CLASS)) return;
+      if (event.target?.tagName !== 'VIDEO') return;
+      try {
+        event.target.pause();
+      } catch {
+        /* the element is being replaced by a SPA navigation */
+      }
+    },
+    true
+  );
+
   const observer = new MutationObserver(scheduleScan);
 
   /**
@@ -1471,9 +2354,17 @@
   function start() {
     observer.observe(document.documentElement, { childList: true, subtree: true });
     startAdHeartbeat();
+    // Cards left undecided because they were far off screen are judged when the
+    // scroll pass brings them near. Passive: this never delays the scroll.
+    window.addEventListener('scroll', scheduleScan, { passive: true });
     window.addEventListener('yt-navigate-finish', () => {
-      // A new page is a new channel to check, so the memo has to be cleared.
+      // A new page is a new channel AND a new video to check, so both memos have
+      // to be cleared — and the previous video's player block removed, or it
+      // would follow the user to an unrelated page.
       lastCheckedPageUrl = null;
+      checkedVideoKey = null;
+      videoVerdict = null;
+      clearPlayerBlock();
       applyShorts();
       applyAds();
       scheduleScan();

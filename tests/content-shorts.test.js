@@ -88,6 +88,58 @@ test('the channel page Shorts tab is hidden', () => {
   assert.ok(script.includes("'yt-tab-shape'"), 'the script should consider the tab');
 });
 
+test('a Short in the reels player is a card like any other', () => {
+  // The player is where a Short is actually WATCHED, so covering it is the only
+  // way the overlay or Remove mode can act on one. Its title is not on a card:
+  // the live player titles it with a `yt-shorts-video-title-view-model` h1, so
+  // reading only the feed-lockup classes left it empty and an explicit keyword
+  // could never match.
+  assert.ok(script.includes("'ytd-reel-video-renderer'"), 'the reel must be a recognised card');
+  assert.ok(
+    script.includes('yt-shorts-video-title-view-model h1') &&
+      script.includes('ytShortsVideoTitleViewModelShortsVideoTitle'),
+    'the title must be read from the player’s current view model'
+  );
+  assert.ok(
+    /function thumbnailHost[\s\S]{0,320}card\.localName === 'ytd-reel-video-renderer'/.test(script),
+    'a Short has no thumbnail, so the cover belongs on its player'
+  );
+  assert.ok(
+    /if \(element\.localName === 'ytd-reel-video-renderer'\) pauseShortPlayback\(element\)/.test(script),
+    'a cover over a playing Short is not a block unless the video is paused'
+  );
+});
+
+test('a Short in a feed shelf is judged too, and only once', () => {
+  // A shelf Short is wrapped by a `ytd-rich-item-renderer` on the home feed, but
+  // the channel page serves the lockup bare. Without it in `cardElements` a
+  // blocked channel’s Short stayed in the shelf.
+  assert.ok(script.includes('SHORTS_LOCKUP_SELECTOR'), 'the Shorts lockup must be a known card shape');
+  assert.ok(
+    /for \(const short of document\.querySelectorAll\(SHORTS_LOCKUP_SELECTOR\)\)/.test(script),
+    'the scan must include Shorts lockups'
+  );
+  assert.ok(
+    /!short\.closest\(CARD_SELECTOR\) && !short\.closest\(LOCKUP_CARD_SELECTOR\)/.test(script),
+    'a Short already covered by a renderer must NOT be evaluated twice'
+  );
+  assert.ok(
+    /function cardElementFor\(node\)[\s\S]{0,300}closest\(SHORTS_LOCKUP_SELECTOR\)/.test(script),
+    'the right-click and ⋮ paths must resolve a shelf Short the same way'
+  );
+});
+
+test('/shorts resolves the channel from the reel that is on screen', () => {
+  // A /shorts/<id> URL names no channel. The reel’s header names it (the live
+  // link is /@handle/shorts), and the page’s player response is the fallback.
+  assert.ok(script.includes("location.pathname.startsWith('/shorts')"));
+  assert.ok(script.includes('function shortsPageTarget'), 'the page target needs its own resolver');
+  assert.ok(
+    script.includes('return (visible ? cardChannelTarget(visible) : null) ?? watchIdentityFromPlayerResponse();'),
+    'the on-screen reel wins, then the page’s own player response'
+  );
+});
+
 test('hiding a Shorts surface is resolved to the element to hide', () => {
   // The shelf must take its section wrapper with it, or the grid keeps the row.
   assert.ok(script.includes('shelfContainer'), 'a shelf should be resolved through its wrapper');

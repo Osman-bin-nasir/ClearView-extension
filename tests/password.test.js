@@ -12,14 +12,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  PASSWORD_MAX_ATTEMPTS,
   clearPassword,
   getPasswordRecord,
   hasPassword,
   isOnboarded,
   markOnboarded,
+  passwordLockRemaining,
   setPassword,
   validatePassword,
   verifyPassword,
+  verifyPasswordGuarded,
 } from '../src/common/password.js';
 import { STORAGE } from '../src/common/constants.js';
 
@@ -84,6 +87,35 @@ test('the right password verifies and a wrong one does not', async () => {
   assert.equal(await verifyPassword('correct horse '), false);
   assert.equal(await verifyPassword('Correct horse'), false);
   assert.equal(await verifyPassword(''), false);
+});
+
+test('repeated wrong guesses lock the check, and a right one clears the count', async () => {
+  // A four-character password on a shared machine is guessable by hand, so a
+  // wrong guess has to cost something. The lock is local, like the hash.
+  const { local } = stubChrome();
+  await setPassword('secret1');
+
+  for (let attempt = 0; attempt < PASSWORD_MAX_ATTEMPTS - 1; attempt += 1) {
+    assert.equal(await verifyPasswordGuarded('wrong'), false, 'a free wrong guess returns false');
+  }
+  await assert.rejects(
+    () => verifyPasswordGuarded('wrong'),
+    (error) => error.code === 'password_locked',
+    'the last free guess locks the check'
+  );
+  assert.ok((await passwordLockRemaining()) > 0, 'the lock is recorded with a time');
+
+  // Even the RIGHT password waits out the lock.
+  await assert.rejects(
+    () => verifyPasswordGuarded('secret1'),
+    (error) => error.code === 'password_locked'
+  );
+
+  // ...and when it expires, the right one works and resets the count.
+  local[STORAGE.passwordAttempts] = { count: PASSWORD_MAX_ATTEMPTS, until: Date.now() - 1 };
+  assert.equal(await passwordLockRemaining(), 0);
+  assert.equal(await verifyPasswordGuarded('secret1'), true);
+  assert.equal(local[STORAGE.passwordAttempts], null, 'a correct password clears the record');
 });
 
 test('the same password hashes differently every time (per-install salt)', async () => {

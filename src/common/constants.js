@@ -61,6 +61,8 @@ export const STORAGE = Object.freeze({
   password: 'cv.password',
   /** Whether the first-run password offer has been answered (create or skip). */
   onboarded: 'cv.onboarded',
+  /** Failed password attempts + lockout, local so it cannot be cleared by sync. */
+  passwordAttempts: 'cv.passwordAttempts',
 });
 
 /**

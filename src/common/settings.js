@@ -83,23 +83,60 @@ export function isUuid(value) {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
-/** Local protection counters ({ total, byKeyword, byReason, lastAt }). */
+/** Local protection counters ({ total, byDay, byKeyword, byReason, lastAt }). */
+const EMPTY_STATS = Object.freeze({ total: 0, byDay: {}, byReason: {}, lastAt: null, recent: [] });
+
+/**
+ * How many days of per-day counts are kept.
+ *
+ * The popup shows "today", which needs a count that survives midnight without
+ * anything having to run at midnight. Keeping a short window of days is what
+ * makes that possible, and a fortnight is small enough (fourteen numbers) that
+ * there is no reason to prune harder.
+ */
+const KEPT_DAYS = 14;
+
+/** A local calendar day, `YYYY-MM-DD`. Local, because the user's "today" is. */
+export function dayKey(timestamp = Date.now()) {
+  const date = new Date(timestamp);
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 export async function getStats() {
-  return readLocal(STORAGE.stats, { total: 0, byReason: {}, lastAt: null });
+  return readLocal(STORAGE.stats, { ...EMPTY_STATS });
+}
+
+/** Add today's block to `byDay`, dropping the days that have fallen out of the window. */
+function withToday(byDay, timestamp) {
+  const next = { ...(byDay ?? {}) };
+  const today = dayKey(timestamp);
+  next[today] = (next[today] ?? 0) + 1;
+
+  const keep = new Set();
+  for (let back = 0; back < KEPT_DAYS; back += 1) {
+    keep.add(dayKey(timestamp - back * 86_400_000));
+  }
+  for (const day of Object.keys(next)) {
+    if (!keep.has(day)) delete next[day];
+  }
+  return next;
 }
 
 export async function bumpStats(reason, detail) {
   const stats = await getStats();
+  const at = Date.now();
   const next = {
     total: (stats.total ?? 0) + 1,
-    lastAt: Date.now(),
+    byDay: withToday(stats.byDay, at),
+    lastAt: at,
     byReason: { ...(stats.byReason ?? {}) },
     recent: Array.isArray(stats.recent) ? stats.recent : [],
   };
   const key = reason ?? 'unknown';
   next.byReason[key] = (next.byReason[key] ?? 0) + 1;
   if (detail) {
-    next.recent.unshift({ reason: key, detail: String(detail).slice(0, 120), at: Date.now() });
+    next.recent.unshift({ reason: key, detail: String(detail).slice(0, 120), at });
     next.recent = next.recent.slice(0, 20);
   }
   await writeLocal(STORAGE.stats, next);
@@ -107,7 +144,7 @@ export async function bumpStats(reason, detail) {
 }
 
 export async function resetStats() {
-  await writeLocal(STORAGE.stats, { total: 0, byReason: {}, lastAt: null, recent: [] });
+  await writeLocal(STORAGE.stats, { ...EMPTY_STATS });
 }
 
 /** Subscribe to settings changes. Returns an unsubscribe function. */

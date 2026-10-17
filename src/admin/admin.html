@@ -37,20 +37,23 @@
 
       <!-- Signed in: the moderation surface. -->
       <section id="dashboard" class="hidden">
-        <header class="page-header">
-          <div class="row-between">
-            <div>
-              <h1 class="page-title">Shared blocklist moderation</h1>
-              <p class="page-subtitle" id="admin-who">Signed in</p>
+        <header class="admin-head">
+          <div class="admin-brand">
+            <span class="brand-mark" aria-hidden="true">
+              <img src="../../icons/logo.png" alt="" />
+            </span>
+            <div class="admin-brand__text">
+              <h1 class="admin-title">Shared blocklist moderation</h1>
+              <p class="admin-who" id="admin-who">Signed in</p>
             </div>
-            <div class="header-actions">
-              <button class="btn small" id="back-options" type="button">Blocking settings</button>
-              <button class="btn small danger" id="signout" type="button">Sign out</button>
-            </div>
+          </div>
+          <div class="header-actions">
+            <button class="chip-btn" id="back-options" type="button">Blocking settings</button>
+            <button class="btn small danger" id="signout" type="button">Sign out</button>
           </div>
         </header>
 
-        <nav class="tabs" id="tabs">
+        <nav class="tabs" id="tabs" aria-label="Dashboard sections">
           <button class="tab selected" data-tab="overview" type="button">Overview</button>
           <button class="tab" data-tab="queue" type="button">Review queue</button>
           <button class="tab" data-tab="rules" type="button">Published rules</button>

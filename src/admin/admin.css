@@ -1,30 +1,98 @@
-/* Admin dashboard layout: a wider column than the options page, since it is a
-   work surface rather than a settings screen. */
+/*
+ * The admin dashboard.
+ *
+ * A work surface, not a settings screen: one wide column, a quiet header, a
+ * hairline tab rail and tables that stay readable at a glance. The shared theme
+ * still supplies the buttons, pills and fields; this file flattens them on this
+ * page — small radii, one border, no gradients — so the dashboard belongs to
+ * the same product as the redesigned settings page without competing with it.
+ */
 
-.shell {
-  max-width: 940px;
-  margin: 0 auto;
-  padding-bottom: 64px;
+:root {
+  --admin-border: #22272b;
+  --admin-card: #111416;
+  --admin-raise: #15191c;
+  --admin-measure: 1000px;
 }
 
+body {
+  background-image: none;
+}
+
+.shell {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 24px 72px;
+}
+
+/* ── Signed-out gate ───────────────────────────────────────────────────── */
+
 .gate {
-  max-width: 420px;
+  max-width: 460px;
   margin: 10vh auto 0;
 }
 
-/* The sign-in card stands alone rather than in a list of settings rows, so it
-   is drawn as a box: a full border, and no section label above it to borrow. */
 .gate .card {
   margin: 0;
-  border: 1px solid var(--outline);
-  border-radius: var(--radius-card);
-  padding: 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 10px;
+  background: var(--admin-card);
+  background-image: none;
+  padding: 24px;
 }
 
 .hint {
   font-size: 11.5px;
+  color: var(--faint);
+  line-height: 1.6;
+}
+
+.hint code {
+  font-size: 11px;
   color: var(--muted);
-  line-height: 1.5;
+}
+
+/* ── Header ────────────────────────────────────────────────────────────── */
+
+.admin-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 26px 0 18px;
+  border-bottom: 1px solid var(--admin-border);
+}
+
+.admin-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.admin-brand .brand-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+}
+
+.admin-brand__text {
+  min-width: 0;
+}
+
+.admin-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.4px;
+  line-height: 1.2;
+}
+
+.admin-who {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--faint);
 }
 
 .header-actions {
@@ -34,33 +102,128 @@
   flex-wrap: wrap;
 }
 
+.header-actions .btn,
+.header-actions .chip-btn {
+  border-radius: 7px;
+}
+
+/* ── Tabs ──────────────────────────────────────────────────────────────── */
+
 .tabs {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
-  gap: 4px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--outline);
-  flex-wrap: wrap;
+  gap: 22px;
+  padding: 0;
+  margin: 0 0 20px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--admin-border);
+  overflow-x: auto;
 }
 
 .tab {
+  flex: none;
   font: inherit;
   font-size: 12.5px;
-  font-weight: 500;
-  padding: 9px 10px;
-  border: none;
-  background: none;
-  color: var(--muted);
-  border-bottom: 1px solid transparent;
+  font-weight: 600;
+  padding: 13px 0 11px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--faint);
   cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
 }
 
 .tab.selected {
   color: var(--text);
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--primary);
+}
+
+/* ── Cards and tables ──────────────────────────────────────────────────── */
+
+#panel > .card,
+.gate .card {
+  margin-top: 14px;
+}
+
+#panel > .card {
+  border: 1px solid var(--admin-border);
+  border-radius: 10px;
+  background: var(--admin-card);
+  background-image: none;
+  padding: 18px;
+}
+
+#panel .card-head {
+  align-items: flex-start;
+}
+
+#panel .card-title {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.1px;
+}
+
+#panel .card-subtitle {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--faint);
 }
 
 .card-detail code {
   font-size: 11.5px;
+}
+
+table.admin-table {
+  width: 100%;
+  margin-top: 12px;
+  border-collapse: collapse;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 12.5px;
+}
+
+table.admin-table th,
+table.admin-table td {
+  text-align: left;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--admin-border);
+  vertical-align: top;
+}
+
+table.admin-table th {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--faint);
+  font-weight: 600;
+  background: var(--admin-raise);
+}
+
+table.admin-table td {
+  background: var(--admin-card);
+}
+
+table.admin-table tr:last-child td {
+  border-bottom: none;
+}
+
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
 }
 
 .actions-cell {
@@ -69,12 +232,292 @@
   flex-wrap: wrap;
 }
 
+.meta.muted {
+  color: var(--faint);
+  font-size: 11.5px;
+}
+
+.reason-cell {
+  max-width: 340px;
+  color: var(--faint);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.tab-filters {
+  margin-top: 12px;
+  gap: 6px;
+}
+
+.tab-filters .btn {
+  border-radius: 6px;
+}
+
+/* ── Overview numbers ──────────────────────────────────────────────────── */
+
+.admin-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.admin-stat {
+  padding: 14px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: var(--admin-raise);
+}
+
+.admin-stat__value {
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.7px;
+  line-height: 1.1;
+}
+
+.admin-stat__label {
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--faint);
+}
+
+.admin-stat.pending .admin-stat__value {
+  color: var(--warning);
+}
+
+.admin-stat.ok .admin-stat__value {
+  color: var(--primary);
+}
+
+.admin-stat.rejected .admin-stat__value {
+  color: var(--danger);
+}
+
 .count-pills {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   margin-top: 6px;
 }
+
+/* A rule's contested-ness: the count, its share, and a badge when it matters. */
+.contested-cell {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  white-space: nowrap;
+}
+
+/* ── False-positive report groups ──────────────────────────────────────── */
+
+.report-trend {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: var(--admin-raise);
+}
+
+.report-trend__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.report-trend__label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.report-trend__total {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.report-trend__bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 44px;
+  margin-top: 10px;
+}
+
+.report-trend__bar-slot {
+  flex: 1 1 0;
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.report-trend__bar {
+  width: 100%;
+  min-height: 3px;
+  border-radius: 3px;
+  background: var(--primary);
+  opacity: 0.75;
+}
+
+.report-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.report-card {
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: var(--admin-card);
+  overflow: hidden;
+}
+
+.report-card:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.report-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  padding: 13px 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.report-head:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--primary);
+}
+
+.report-head__titles {
+  min-width: 0;
+}
+
+.report-head__name {
+  font-size: 13.5px;
+  font-weight: 650;
+  letter-spacing: -0.1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-head__meta {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+.report-head__side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
+.report-head__chevron {
+  font-size: 18px;
+  line-height: 1;
+  color: var(--faint);
+  transition: transform 0.14s ease;
+}
+
+.report-head.is-open .report-head__chevron {
+  transform: rotate(90deg);
+  color: var(--primary);
+}
+
+.report-body {
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--admin-border);
+}
+
+.report-videos {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 12px;
+  border: 1px solid var(--admin-border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.report-video {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  color: inherit;
+  text-decoration: none;
+  background: var(--admin-raise);
+}
+
+.report-video + .report-video {
+  border-top: 1px solid var(--admin-border);
+}
+
+.report-video:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.report-video__title {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.report-video__url {
+  font-size: 11.5px;
+  color: var(--primary);
+  word-break: break-all;
+}
+
+.report-video__meta {
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.report-video--plain {
+  cursor: default;
+}
+
+.report-empty {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px dashed var(--admin-border);
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.report-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.report-actions .btn {
+  border-radius: 6px;
+}
+
+/* ── States ────────────────────────────────────────────────────────────── */
 
 .empty-state {
   padding: 24px;
@@ -87,27 +530,44 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 20px 16px;
-  color: var(--muted);
+  padding: 22px 4px;
+  color: var(--faint);
   font-size: 13px;
 }
 
-.reason-cell {
-  max-width: 320px;
-  color: var(--muted);
-  font-size: 12px;
-}
+/* ── Narrow windows ────────────────────────────────────────────────────── */
 
-.toast {
-  position: fixed;
-  left: 50%;
-  bottom: 20px;
-  transform: translateX(-50%);
-  background: var(--text);
-  color: var(--bg);
-  padding: 8px 14px;
-  border-radius: 8px;
-  font-size: 12.5px;
-  font-weight: 500;
-  z-index: 10;
+@media (max-width: 720px) {
+  .shell {
+    padding: 0 16px 56px;
+  }
+
+  .admin-head {
+    padding: 20px 0 14px;
+  }
+
+  .admin-title {
+    font-size: 17px;
+  }
+
+  .admin-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tabs {
+    gap: 16px;
+  }
+
+  #panel > .card {
+    padding: 14px;
+  }
+
+  table.admin-table th,
+  table.admin-table td {
+    padding: 9px 10px;
+  }
+
+  .report-head {
+    padding: 12px;
+  }
 }

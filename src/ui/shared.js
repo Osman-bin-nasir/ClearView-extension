@@ -6,6 +6,8 @@
  * what is blocked without asking the worker to explain its own rules.
  */
 
+import { icon as glyph } from './icons.js';
+
 /** Send a message to the worker, resolving to its payload or throwing a coded error. */
 export async function send(type, payload = {}) {
   const response = await chrome.runtime.sendMessage({ type, ...payload });
@@ -43,14 +45,19 @@ export function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
 }
 
-/** A labelled switch. `onChange` receives the next boolean. */
-export function switchControl(checked, onChange, { disabled = false } = {}) {
+/**
+ * A labelled switch. `onChange` receives the next boolean.
+ *
+ * `label` names what the switch controls, for a screen reader — "Toggle" alone
+ * says nothing next to four of them on one page.
+ */
+export function switchControl(checked, onChange, { disabled = false, label = 'Toggle' } = {}) {
   const button = el('button', {
     class: 'switch',
     type: 'button',
     role: 'switch',
     'aria-checked': checked ? 'true' : 'false',
-    'aria-label': 'Toggle',
+    'aria-label': label,
     disabled: disabled ? true : false,
   });
   button.addEventListener('click', () => {
@@ -62,50 +69,116 @@ export function switchControl(checked, onChange, { disabled = false } = {}) {
 }
 
 /**
- * One settings row: an optional icon badge, a label, a trailing control and a
- * body.
+ * One settings row: an optional icon badge, a label, a trailing control, an
+ * explanation and the body its caller fills in.
  *
  * The badge stays: the theme's `.card-head` is laid out around it, and it is the
  * only thing that makes a page of near-identical rows scannable. It carries no
- * information the title does not, so a row without one simply omits it.
+ * information the title does not, so a row without one simply omits it. It takes
+ * either an `icons.js` node or a string, so a page can still fall back to text.
+ *
+ * `variant` is the card's state, and it is the whole visual language of the app's
+ * Protection tab:
+ *   - `'on'`     — active protection: green, white type, no badge tile.
+ *   - `'alert'`  — a filter that hides content (Brain Bot, Strict Mode): maroon.
+ *   - `'dashed'` — there is a list behind this row.
+ *   - `''`       — an ordinary slate row.
+ * `dim` is separate, because it is a different fact: this row cannot do anything
+ * until Protection is on again.
+ *
+ * `info` puts the ⓘ beside the row. It folds `detail` away and back — the panel
+ * starts open (`open: false` for the popup, where space is the whole point), so
+ * the button is a way to quieten the page rather than the only way to read it.
+ *
  * Returns `{ card, body }`.
  */
-export function card({ icon, title, subtitle, trailing, detail }) {
+export function card({
+  icon: badge,
+  title,
+  subtitle,
+  trailing,
+  detail,
+  variant = '',
+  dim = false,
+  info = false,
+  open = true,
+  action = null,
+}) {
   const body = el('div', { class: 'card-body' });
+
+  const detailNode = detail && detail.length
+    ? el('div', { class: `card-detail${open ? '' : ' hidden'}` }, [
+        el('ul', {}, detail.map((line) => el('li', { text: line }))),
+      ])
+    : null;
+
+  let infoButton = null;
+  if (info && detailNode) {
+    infoButton = el(
+      'button',
+      {
+        class: 'card-info',
+        type: 'button',
+        'aria-expanded': open ? 'true' : 'false',
+        'aria-label': `About ${title}`,
+      },
+      [glyph('info', 16)]
+    );
+    infoButton.addEventListener('click', () => {
+      const collapsed = detailNode.classList.toggle('hidden');
+      infoButton.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    });
+  }
+
   const head = el('div', { class: 'card-head' }, [
-    icon ? el('div', { class: 'card-icon', text: icon, 'aria-hidden': 'true' }) : null,
+    badge
+      ? el('div', { class: 'card-icon', 'aria-hidden': 'true' }, [
+          badge instanceof Node ? badge : document.createTextNode(String(badge)),
+        ])
+      : null,
     el('div', { class: 'card-titles' }, [
       el('div', { class: 'card-title', text: title }),
       subtitle ? el('div', { class: 'card-subtitle', text: subtitle }) : null,
     ]),
     trailing ?? null,
+    infoButton,
   ]);
+
   const children = [head];
-  if (detail) children.push(el('div', { class: 'card-detail' }, [el('ul', {}, detail.map((line) => el('li', { text: line })))]));
+  if (detailNode) children.push(detailNode);
   children.push(body);
-  return { card: el('div', { class: 'card' }, children), body };
+  if (action) {
+    children.push(
+      el(
+        'button',
+        {
+          class: 'card-action',
+          type: 'button',
+          disabled: action.disabled ? true : false,
+          onclick: action.onClick,
+        },
+        [action.glyph ? glyph(action.glyph, 17) : null, el('span', { text: action.label })]
+      )
+    );
+  }
+
+  const classes = ['card', variant, dim ? 'dim' : ''].filter(Boolean).join(' ');
+  return { card: el('div', { class: classes }, children), body };
+}
+
+/**
+ * The chevron a row shows when the thing it names is somewhere else.
+ * A glyph on its own carries no text, so it is marked decorative here and the
+ * row's own label is what a screen reader reads.
+ */
+export function chevron(size = 20) {
+  const node = glyph('chevron', size);
+  const wrap = el('span', { class: 'row-chevron', 'aria-hidden': 'true' }, [node]);
+  return wrap;
 }
 
 export function section(label) {
   return el('div', { class: 'section' }, [el('span', { class: 'section-label', text: label })]);
-}
-
-/**
- * The popup's protection summary: a state mark, a title and one line of status.
- *
- * @param {{ on: boolean, title: string, subtitle: string, trailing?: Node }} options
- */
-export function hero({ on, icon, title, subtitle, trailing = null }) {
-  return el('div', { class: `hero${on ? ' on' : ''}` }, [
-    el('div', { class: 'hero-head' }, [
-      el('div', { class: 'hero-mark', text: icon, 'aria-hidden': 'true' }),
-      el('div', { class: 'card-titles' }, [
-        el('div', { class: 'hero-title', text: title }),
-        el('div', { class: 'hero-sub', text: subtitle }),
-      ]),
-      trailing,
-    ]),
-  ]);
 }
 
 /** A transient message, for outcomes that have no place of their own to live. */
@@ -120,6 +193,18 @@ export function toast(text) {
   node.textContent = text;
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => node.remove(), 3200);
+}
+
+/**
+ * `1204` → `1,204`, for the counts the pages print.
+ *
+ * Grouped by hand rather than with `toLocaleString`, so the digits a page shows
+ * are the same digits everywhere and in the tests: a locale that grouped by
+ * lakhs, or that used a comma as a decimal mark, would change what a count
+ * appears to say.
+ */
+export function grouped(value) {
+  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 export function pill(text, kind = '') {
@@ -149,6 +234,12 @@ export function errorMessage(error) {
   switch (error?.code) {
     case 'invalid_password':
       return 'That password was not correct.';
+    case 'password_required':
+      return 'Set a Protection password to finish setup.';
+    case 'password_locked':
+      // The server-side ring is not used here: the worker counts the failures and
+      // says how long the lock lasts in the message it already carries.
+      return error?.message ?? 'Too many wrong attempts. Try again in a minute.';
     case 'password_too_short':
       return 'Use at least 4 characters for your password.';
     case 'password_too_long':

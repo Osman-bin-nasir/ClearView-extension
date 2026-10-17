@@ -35,6 +35,9 @@ function stubChrome() {
     async remove(key) {
       for (const k of [].concat(key)) delete store[k];
     },
+    async clear() {
+      for (const k of Object.keys(store)) delete store[k];
+    },
   });
 
   globalThis.chrome = {
@@ -109,19 +112,31 @@ test('the ad ruleset is switched on at boot from the default settings', async ()
 
 test('turning Protection off disables the ad ruleset, and on enables it again', async () => {
   const stub = await loadWorker();
+  // Settings are locked until setup is done, so every write below carries the
+  // password the worker now requires.
+  await callWorker(stub, { type: 'password/set', password: 'secret1' });
   stub.rulesets.enabled.length = 0;
   stub.rulesets.disabled.length = 0;
 
-  await callWorker(stub, { type: 'settings/update', patch: { protectionEnabled: false } });
+  await callWorker(stub, {
+    type: 'settings/update',
+    patch: { protectionEnabled: false },
+    password: 'secret1',
+  });
   assert.deepEqual(stub.rulesets.disabled, ['youtube_ads'], 'Protection off must stop ad blocking');
 
   stub.rulesets.enabled.length = 0;
-  await callWorker(stub, { type: 'settings/update', patch: { protectionEnabled: true } });
+  await callWorker(stub, {
+    type: 'settings/update',
+    patch: { protectionEnabled: true },
+    password: 'secret1',
+  });
   assert.deepEqual(stub.rulesets.enabled, ['youtube_ads'], 'and on must resume it');
 });
 
 test('the ad switch alone controls the ruleset while Protection is on', async () => {
   const stub = await loadWorker();
+  await callWorker(stub, { type: 'password/set', password: 'secret1' });
   stub.rulesets.disabled.length = 0;
   await callWorker(stub, { type: 'settings/update', patch: { blockYoutubeAds: false } });
   assert.deepEqual(stub.rulesets.disabled, ['youtube_ads']);
@@ -129,15 +144,30 @@ test('the ad switch alone controls the ruleset while Protection is on', async ()
 
 // ── The password gate ────────────────────────────────────────────────────
 
-test('a fresh install has no password and is not gated', async () => {
+test('a fresh install must finish setup before anything can change', async () => {
   const stub = await loadWorker();
   const state = await callWorker(stub, { type: 'state/get' });
   assert.equal(state.passwordSet, false);
   assert.equal(state.onboarded, false);
 
-  // Protection can be changed freely.
-  await callWorker(stub, { type: 'settings/update', patch: { protectionEnabled: false } });
-  assert.equal(stub.sync[SETTINGS_KEY].protectionEnabled, false);
+  // Every settings write is refused until the mandatory password exists —
+  // including the master switch, which is the one an unfinished install would
+  // most like to change.
+  await assert.rejects(
+    () => callWorker(stub, { type: 'settings/update', patch: { protectionEnabled: false } }),
+    (error) => error.code === 'password_required'
+  );
+  await assert.rejects(
+    () => callWorker(stub, { type: 'settings/update', patch: { blockYoutubeAds: false } }),
+    (error) => error.code === 'password_required'
+  );
+  assert.equal(stub.sync[SETTINGS_KEY], undefined, 'a refused write must write nothing');
+
+  // Setup itself is allowed, and unlocks the page.
+  const after = await callWorker(stub, { type: 'password/set', password: 'secret1' });
+  assert.equal(after.passwordSet, true);
+  await callWorker(stub, { type: 'settings/update', patch: { blockYoutubeAds: false } });
+  assert.equal(stub.sync[SETTINGS_KEY].blockYoutubeAds, false);
 });
 
 test('once a password is set, changing Protection is refused without it', async () => {
@@ -209,9 +239,30 @@ test('the password can be verified, changed and removed — each with the curren
   const state = await callWorker(stub, { type: 'password/remove', password: 'secret2' });
   assert.equal(state.passwordSet, false, 'removing it clears the gate');
 
-  // ...and Protection is free again.
-  await callWorker(stub, { type: 'settings/update', patch: { protectionEnabled: false } });
-  assert.equal(stub.sync[SETTINGS_KEY].protectionEnabled, false);
+  // ...and the mandatory setup gate is back, so there is no password-less
+  // window in which Protection could be switched off.
+  await assert.rejects(
+    () => callWorker(stub, { type: 'settings/update', patch: { protectionEnabled: false } }),
+    (error) => error.code === 'password_required'
+  );
+});
+
+test('the user can export their data and erase everything', async () => {
+  const stub = await loadWorker();
+  await callWorker(stub, { type: 'password/set', password: 'secret1' });
+  await callWorker(stub, { type: 'settings/update', patch: { blockYoutubeAds: false } });
+
+  const exported = await callWorker(stub, { type: 'data/export' });
+  assert.equal(exported.settings.blockYoutubeAds, false, 'settings travel in the export');
+  assert.ok(exported.anonymousId, 'and the anonymous id, so contributions are explainable');
+  assert.ok(!('password' in exported) && !('hash' in exported), 'credentials never travel');
+  assert.ok(exported.exportedAt, 'the document is dated');
+
+  const state = await callWorker(stub, { type: 'data/erase' });
+  assert.equal(state.passwordSet, false, 'erasing removes the password too');
+  assert.equal(state.settings.protectionEnabled, true, 'and restores the defaults');
+  assert.deepEqual(Object.keys(stub.sync), [], 'no synced setting survives');
+  assert.ok(!('cv.password' in stub.local), 'no local credential survives');
 });
 
 test('the content script is told about the ad switch', async () => {
@@ -221,8 +272,13 @@ test('the content script is told about the ad switch', async () => {
   assert.equal(typeof config.enabled, 'boolean');
 });
 
-test('skipping the first-run offer is recorded', async () => {
+test('the only way past setup is creating a password', async () => {
   const stub = await loadWorker();
-  await callWorker(stub, { type: 'password/dismissOnboarding' });
-  assert.equal((await callWorker(stub, { type: 'state/get' })).onboarded, true);
+  assert.equal((await callWorker(stub, { type: 'state/get' })).onboarded, false);
+
+  // There is no dismiss message any more: setup is finished by setting a
+  // password and nothing else.
+  assert.equal(stub.onMessage.length, 1, 'one listener; no separate skip path');
+  const state = await callWorker(stub, { type: 'password/set', password: 'secret1' });
+  assert.equal(state.onboarded, true);
 });

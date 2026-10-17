@@ -13,6 +13,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { dayKey } from '../src/common/settings.js';
 
 // ── A minimal DOM ────────────────────────────────────────────────────────
 
@@ -167,7 +168,7 @@ function installChrome(state) {
           case 'state/get':
             return { ok: true, data: state };
           case 'submissions/list':
-            return { ok: true, data: { submissions: [] } };
+            return { ok: true, data: { submissions: state.submissions ?? [] } };
           default:
             return { ok: true, data: state };
         }
@@ -204,8 +205,14 @@ function workerState(overrides = {}) {
     blockedChannels: overrides.blockedChannels ?? [],
     bundleCounts: { builtIn: 500, domains: 60, everywhere: 1, youtube: 1, channels: 0, channelIds: 0 },
     global: { available: false, version: null, fetchedAt: null, keywordCount: 0, channelCount: 0, liveKeywords: [], liveChannels: [] },
-    stats: { total: 3, byReason: { search: 1, domain: 2 }, lastAt: Date.now(), recent: [] },
+    stats: overrides.stats ?? {
+      total: 3,
+      byReason: { search: 1, domain: 2 },
+      lastAt: Date.now(),
+      recent: [],
+    },
     anonymousId: '11111111-2222-3333-4444-555555555555',
+    submissions: overrides.submissions ?? [],
   };
 }
 
@@ -213,31 +220,44 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 
 // ── The popup ────────────────────────────────────────────────────────────
 
-test('the popup renders its hero, the ad toggle and the first-run password offer', async () => {
-  const { byId, body } = installDom(['content', 'open-options', 'open-options-footer', 'open-admin']);
+test('the popup is the name, the activity and a way in once protection is on', async () => {
+  const { byId, body } = installDom(['content', 'popup-status']);
   installChrome(workerState({ passwordSet: false, onboarded: false }));
 
   await import(`../src/popup/popup.js?case=${Date.now()}${Math.random()}`);
   await settle();
 
-  const text = byId.content.textContent;
-  assert.match(text, /Protection is on/, 'the hero must state the protection status');
-  assert.match(text, /Block YouTube ads/, 'the ad toggle must be on the popup');
-  assert.match(text, /Hide YouTube Shorts/, 'the Shorts control must remain');
-  assert.match(text, /Brain Bot/, 'the Brain Bot control must remain');
-  assert.match(text, /Protect your settings/, 'the first-run password offer must show when none is set');
-  assert.match(text, /Blocked websites/, 'the user lists must render');
+  assert.match(byId['popup-status'].textContent, /Protection on/, 'the header states the state');
 
-  // The hero's switch is a real control in the tree.
+  const text = byId.content.textContent;
+  assert.match(text, /Blocked today0/, 'today’s count is the headline');
+  assert.match(text, /7 days0/, 'and the week is shown beside it');
+  assert.match(text, /All time3/, 'the lifetime total too');
+  assert.match(text, /Open settings/, 'there must be one way into the full settings');
+  assert.match(text, /Set your Protection password to finish setup/, 'an unfinished install says so');
+  assert.match(text, /Finish setup/, 'and leads to the one screen that can finish it');
+
+  const chart = walk(byId.content).find((node) => node.attributes?.role === 'img');
+  assert.ok(chart, 'the activity panel must carry a seven-day chart');
+  assert.match(chart.getAttribute('aria-label'), /last seven days/, 'and describe it for a screen reader');
+
+  // Minimalism is the point: once protection is ON the switch is not drawn at
+  // all, so there is nothing in the popup that can turn it off by accident.
   const switches = walk(byId.content).filter((node) => node.attributes?.role === 'switch');
-  assert.ok(switches.length >= 1, 'the hero must carry a switch');
-  assert.equal(switches[0].getAttribute('aria-checked'), 'true', 'and it must reflect the on state');
+  assert.equal(switches.length, 0, 'the protection switch must be hidden while protection is on');
+  assert.doesNotMatch(text, /Protection off/, 'and no off-state row is drawn either');
+
+  // The controls that used to make this popup scroll are gone from it, and stay
+  // gone. They live in the settings page.
+  for (const moved of ['Block YouTube ads', 'Hide YouTube Shorts', 'Brain Bot', 'Blocked websites', 'Blocked keywords', 'Strict Mode']) {
+    assert.doesNotMatch(text, new RegExp(moved), `${moved} belongs in the settings page, not the popup`);
+  }
 
   assert.ok(document.body === body, 'the document body is the one the shim handed out');
 });
 
-test('the popup says Protection is off when it is', async () => {
-  const { byId } = installDom(['content', 'open-options', 'open-options-footer', 'open-admin']);
+test('the popup says Protection is off, with the one button that turns it back on', async () => {
+  const { byId } = installDom(['content']);
   installChrome(workerState({ settings: { protectionEnabled: false }, passwordSet: true }));
   // `passwordSet: true` also means the first-run offer is long answered.
 
@@ -245,19 +265,45 @@ test('the popup says Protection is off when it is', async () => {
   await settle();
 
   const text = byId.content.textContent;
-  assert.match(text, /Protection is off/);
-  assert.doesNotMatch(text, /Protect your settings/, 'no password offer once one is set');
+  assert.match(text, /Protection off/);
+  assert.match(text, /Nothing is being blocked/);
+  assert.doesNotMatch(text, /Lock the switch with a password/, 'no password offer once one is set');
+
+  // Off is the only state in which the switch is drawn.
+  const switches = walk(byId.content).filter((node) => node.attributes?.role === 'switch');
+  assert.equal(switches.length, 1, 'the switch is the one thing to do while protection is off');
+  assert.equal(switches[0].getAttribute('aria-checked'), 'false');
+  assert.equal(switches[0].getAttribute('aria-label'), 'Protection');
+});
+
+test('today’s number is today’s, not the last day anything was blocked', async () => {
+  const { byId } = installDom(['content']);
+  const today = dayKey();
+  const yesterday = dayKey(Date.now() - 86_400_000);
+  installChrome(
+    workerState({
+      stats: { total: 1204, byDay: { [today]: 7, [yesterday]: 99 }, byReason: {}, lastAt: Date.now(), recent: [] },
+    }),
+  );
+
+  await import(`../src/popup/popup.js?case=${Date.now()}${Math.random()}`);
+  await settle();
+
+  const text = byId.content.textContent;
+  assert.match(text, /All time1,204/, 'a large lifetime count is grouped');
+  assert.match(text, /Blocked today7/, 'today reads today’s entry');
+  assert.doesNotMatch(text, /99/, 'and never the previous day’s');
 });
 
 test('the first-run offer is not repeated once it has been answered', async () => {
-  const { byId } = installDom(['content', 'open-options', 'open-options-footer', 'open-admin']);
+  const { byId } = installDom(['content']);
   installChrome(workerState({ passwordSet: false, onboarded: true }));
 
   await import(`../src/popup/popup.js?case=${Date.now()}${Math.random()}`);
   await settle();
 
   // It stays settable from the settings page; the popup just does not nag.
-  assert.doesNotMatch(byId.content.textContent, /Protect your settings/);
+  assert.doesNotMatch(byId.content.textContent, /Lock the switch with a password/);
 });
 
 // ── The settings page ────────────────────────────────────────────────────
@@ -275,21 +321,76 @@ test('the settings page renders the ad toggle and the password card', async () =
   assert.match(text, /Change password/, 'a set password offers a change');
   assert.match(text, /YouTube protection/, 'the section headings must remain');
   assert.match(text, /instagram/, 'the user keyword list must render');
+  assert.doesNotMatch(text, /null/, 'a missing optional control must not render as the text "null"');
+
+  // The sidebar's destinations are real sections, not decorative labels.
+  const groups = walk(byId.content).filter((node) => node.attributes?.class === 'group');
+  for (const id of ['protection', 'youtube', 'blocked-items', 'community', 'activity', 'security', 'advanced']) {
+    assert.ok(
+      groups.some((group) => group.getAttribute('id') === id),
+      `the page must build the #${id} section the sidebar links to`
+    );
+  }
 
   const switches = walk(byId.content).filter((node) => node.attributes?.role === 'switch');
   assert.ok(switches.length >= 4, 'protection, ads, shorts and Brain Bot each need a switch');
 });
 
-test('the settings page offers to create a password when none is set', async () => {
+test('a settings page with no password is the mandatory setup gate', async () => {
   const { byId } = installDom(['content', 'toast', 'protection-scope', 'open-admin']);
-  // `onboarded: true` keeps the first-run dialog from opening during the test;
-  // the card itself is what is asserted here.
-  installChrome(workerState({ passwordSet: false, onboarded: true }));
+  installChrome(workerState({ passwordSet: false }));
 
   await import(`../src/options/options.js?case=${Date.now()}${Math.random()}`);
   await settle();
 
-  assert.match(byId.content.textContent, /Create password/);
+  const text = byId.content.textContent;
+  assert.match(text, /Protect ClearView/, 'the page becomes the setup screen');
+  assert.match(text, /Create password/);
+  assert.doesNotMatch(text, /Block YouTube ads/, 'no setting is reachable before setup');
+  assert.doesNotMatch(text, /Skip/, 'there is no way past it');
+  const switches = walk(byId.content).filter((node) => node.attributes?.role === 'switch');
+  assert.equal(switches.length, 0, 'and no control to change');
+});
+
+test('a long keyword list opens the whole list on a page of its own', async () => {
+  const { byId } = installDom(['content', 'toast', 'protection-scope', 'open-admin']);
+  installChrome(
+    workerState({
+      settings: { userKeywords: ['one', 'two', 'three', 'four', 'five', 'six'] },
+      passwordSet: true,
+    })
+  );
+
+  await import(`../src/options/options.js?case=${Date.now()}${Math.random()}`);
+  await settle();
+
+  const text = byId.content.textContent;
+  assert.match(text, /Show more \(6\)/, 'the card must lead to the rest of the list');
+  assert.doesNotMatch(text, /six/, 'and must keep only a preview in the page itself');
+
+  const showMore = walk(byId.content).find(
+    (node) => node.tagName === 'BUTTON' && node.textContent === 'Show more (6)'
+  );
+  assert.ok(showMore, 'Show more is the way into the full list');
+  showMore.dispatch('click');
+
+  const fullPage = walk(document.body).find((node) => node.attributes?.class === 'fullpage');
+  assert.ok(fullPage, 'the list must open as a full page, not a small dialog');
+  assert.match(fullPage.textContent, /six/, 'the page shows the items the card left out');
+
+  const search = walk(document.body).find(
+    (node) => node.tagName === 'INPUT' && /search/i.test(node.getAttribute('placeholder') ?? '')
+  );
+  assert.ok(search, 'and it must offer a search field');
+
+  // The field filters the list instead of being decorative.
+  search.value = 'six';
+  search.dispatch('input');
+  assert.match(
+    walk(document.body).map((node) => node.textContent).join(' '),
+    /1 of 6 shown/,
+    'typing in the search must narrow the list'
+  );
 });
 
 // ── The password dialog ──────────────────────────────────────────────────
@@ -302,6 +403,81 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 async function loadPasswordUi() {
   return import(`../src/ui/password.js?case=${Date.now()}${Math.random()}`);
 }
+
+test('a long blocked-channel list also opens the full page', async () => {
+  const { byId } = installDom(['content', 'toast', 'protection-scope', 'open-admin']);
+  const blockedChannels = Array.from({ length: 6 }, (_, index) => ({
+    handle: `@channel${index}`,
+    name: `Channel ${index}`,
+    channelId: null,
+    source: 'manual',
+    addedAt: Date.now(),
+  }));
+  installChrome(workerState({ blockedChannels, passwordSet: true }));
+
+  await import(`../src/options/options.js?case=${Date.now()}${Math.random()}`);
+  await settle();
+
+  const text = byId.content.textContent;
+  assert.match(text, /Show more \(6\)/, 'the channel card must lead to the full list too');
+  assert.doesNotMatch(text, /Channel 5/, 'and must keep only a preview in the page itself');
+
+  const showMore = walk(byId.content).find(
+    (node) => node.tagName === 'BUTTON' && node.textContent === 'Show more (6)'
+  );
+  assert.ok(showMore);
+  showMore.dispatch('click');
+
+  const bodyText = walk(document.body).map((node) => node.textContent).join(' ');
+  assert.match(bodyText, /Channel 5/, 'every channel is on the full page');
+  assert.match(bodyText, /@channel5/, 'with the handle the block is stored by');
+  assert.ok(
+    walk(document.body).some(
+      (node) => node.tagName === 'INPUT' && /search/i.test(node.getAttribute('placeholder') ?? '')
+    ),
+    'and a search field'
+  );
+});
+
+test('submissions and protection history also offer the full page', async () => {
+  const { byId } = installDom(['content', 'toast', 'protection-scope', 'open-admin']);
+  const submissions = Array.from({ length: 6 }, (_, index) => ({
+    kind: 'keyword',
+    value: `suggestion ${index}`,
+    status: 'pending',
+    createdAt: new Date(Date.now() - index * 60_000).toISOString(),
+  }));
+  const recent = Array.from({ length: 10 }, (_, index) => ({
+    reason: 'domain',
+    detail: `blocked site ${index}.example`,
+    at: Date.now() - index * 60_000,
+  }));
+  installChrome(
+    workerState({
+      submissions,
+      stats: { total: 10, byReason: { domain: 10 }, lastAt: Date.now(), recent },
+      passwordSet: true,
+    })
+  );
+
+  await import(`../src/options/options.js?case=${Date.now()}${Math.random()}`);
+  await settle();
+
+  const text = byId.content.textContent;
+  assert.match(text, /Show more \(6\)/, 'the submissions list must lead to the rest');
+  assert.match(text, /Show more \(10\)/, 'the history list must lead to the rest');
+  assert.doesNotMatch(text, /suggestion 5/, 'the preview keeps the rest out of the card');
+
+  const buttons = walk(byId.content).filter(
+    (node) => node.tagName === 'BUTTON' && /^Show more \(\d+\)$/.test(node.textContent)
+  );
+  assert.equal(buttons.length, 2, 'one Show more for each long list');
+
+  buttons[0].dispatch('click');
+  const fullPage = walk(document.body).find((node) => node.attributes?.class === 'fullpage');
+  assert.ok(fullPage, 'the submissions open on a full page');
+  assert.match(fullPage.textContent, /suggestion 5/, 'with every submission visible');
+});
 
 test('the create-password dialog refuses a mismatch and a short password', async () => {
   installDom([]);

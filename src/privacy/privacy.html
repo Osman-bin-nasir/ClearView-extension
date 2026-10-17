@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Privacy policy — ClearView</title>
+    <link rel="stylesheet" href="../ui/theme.css" />
+    <link rel="stylesheet" href="privacy.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="page-header">
+        <div class="row-between">
+          <div class="brand">
+            <span class="brand-mark" aria-hidden="true">
+              <img src="../../icons/logo.png" alt="" />
+            </span>
+            <div>
+              <h1 class="page-title">Privacy policy</h1>
+              <p class="scope-note">ClearView — Content Protection · last updated 15 October 2026</p>
+            </div>
+          </div>
+          <div class="header-actions">
+            <a class="chip-btn" id="back-options" href="../options/options.html">Blocking settings</a>
+          </div>
+        </div>
+      </header>
+
+      <main id="content">
+        <p class="lede">
+          ClearView is a content-protection extension. It checks what you are about to see
+          <strong>on your own device</strong>, and it is built so that the ordinary act of browsing
+          sends nothing anywhere. This page says exactly what stays on your device, what can leave
+          it, and how to remove it.
+        </p>
+
+        <div class="section"><span class="section-label">In short</span></div>
+        <div class="card">
+          <ul class="bullets">
+            <li>Websites and searches you visit are checked on your device and are <strong>never uploaded</strong>.</li>
+            <li>ClearView collects <strong>no browsing history</strong>, no account details and no device identifiers.</li>
+            <li>Nothing leaves your browser unless <em>you</em> ask to block a keyword or channel for everyone, or report a mistake. That request carries a random install id and nothing about you.</li>
+            <li>There is no account, no sign-up and no advertising. ClearView has no trackers and no analytics.</li>
+          </ul>
+        </div>
+
+        <div class="section"><span class="section-label">What stays on your device</span></div>
+        <div class="card">
+          <ul class="bullets">
+            <li>Every page address, search query and YouTube title ClearView looks at is evaluated locally, against a rules bundle the extension holds. It is never sent to a server.</li>
+            <li>When a page is blocked, the blocked page is told only a <strong>reason code</strong> — never the address that was blocked and never the term that matched it — so neither is reprinted on screen or left in your history.</li>
+            <li>The count of items blocked belongs to you alone and stays on the device.</li>
+          </ul>
+        </div>
+
+        <div class="section"><span class="section-label">What can leave your device</span></div>
+        <div class="card">
+          <p class="card-text">
+            Only two actions send anything, and both are started by you:
+          </p>
+          <ul class="bullets">
+            <li>
+              <strong>A request to block something for everyone.</strong> When you ask for a keyword
+              or channel handle to be reviewed for the shared blocklist, ClearView sends the value
+              you typed, the kind of request, and a random install id (below).
+            </li>
+            <li>
+              <strong>A false-positive report.</strong> When you report that a rule blocked
+              something it should not have, ClearView sends that rule's value and the same install id.
+            </li>
+          </ul>
+          <p class="card-text">
+            ClearView also fetches the shared blocklist and the status of your own requests. These
+            requests carry the install id and nothing else. The backend never receives your browsing
+            history, the pages you visited, or the searches you made.
+          </p>
+        </div>
+
+        <div class="section"><span class="section-label">The anonymous install id</span></div>
+        <div class="card">
+          <ul class="bullets">
+            <li>
+              A random id is generated once, when ClearView is installed. It is derived from nothing
+              about you: not from your email, your account, your hardware or your location.
+            </li>
+            <li>
+              It exists so that a contribution is not counted twice and so your own requests can be
+              shown back to you. It is shown, read-only, in the settings page.
+            </li>
+            <li>It is created once and never replaced, so it cannot be refreshed into a new identity on its own.</li>
+          </ul>
+        </div>
+
+        <div class="section"><span class="section-label">What is stored, and where</span></div>
+        <div class="card">
+          <ul class="bullets">
+            <li>
+              <strong>Settings</strong> — your switches, blocked keywords and websites, and blocked
+              channels — are stored in Chrome's synced storage. If you have turned on Chrome Sync
+              they follow your signed-in Chrome profile, exactly as your other browser settings do.
+            </li>
+            <li>
+              <strong>Local data</strong> — the cached shared blocklist, the anonymous id, your
+              blocking counts, and the Protection password — is stored on this device only and is
+              never synced.
+            </li>
+            <li>
+              <strong>The Protection password</strong> is never stored as text. Only a salted
+              PBKDF2-SHA256 hash is kept, on this device, and it is never sent anywhere. It is a
+              device lock, not an account.
+            </li>
+            <li>
+              Removing the extension from Chrome deletes all of this local data. You can also delete
+              your own keywords, blocked websites and channels at any time from the settings page.
+            </li>
+          </ul>
+        </div>
+
+        <div class="section"><span class="section-label">Permissions, and why they are asked for</span></div>
+        <div class="card">
+          <ul class="bullets">
+            <li><strong>storage</strong> — to keep your settings, your caches and your password hash.</li>
+            <li><strong>webNavigation</strong> — to see the address you are navigating to, so it can be checked and, if it matches a rule, stopped.</li>
+            <li><strong>declarativeNetRequest</strong> — to refuse blocked hosts and YouTube ad requests before they load.</li>
+            <li><strong>alarms</strong> — to refresh the shared blocklist periodically.</li>
+            <li><strong>contextMenus</strong> — to offer the right-click “Block this channel” entry.</li>
+            <li><strong>Host access to the ClearView server</strong> — to exchange shared rules and review requests. Access to any other server is requested only if you point the extension at your own.</li>
+          </ul>
+          <p class="card-text">
+            ClearView does not read the content of pages you visit. Its content script runs only on
+            YouTube, and only to hide Shorts, remove ads and filter the feed.
+          </p>
+        </div>
+
+        <div class="section"><span class="section-label">The ClearView server</span></div>
+        <div class="card">
+          <ul class="bullets">
+            <li>Requests go to the ClearView backend, whose address is shown in the settings page's <em>Backend server</em> row. Self-hosters can point it elsewhere.</li>
+            <li>The server stores the shared rules and the review queue. It does not store page visits, search queries or browsing history — it is never sent them.</li>
+            <li>Administrators who review submissions sign in to the server directly. Their credentials are handled by the backend and are never held in the extension.</li>
+          </ul>
+        </div>
+
+        <div class="section"><span class="section-label">Children</span></div>
+        <div class="card">
+          <ul class="bullets">
+            <li>ClearView is meant to be used with a parent or guardian, or by an adult. It asks for no personal information from anyone, and it creates no account for anyone.</li>
+          </ul>
+        </div>
+
+        <div class="section"><span class="section-label">Changes, and contact</span></div>
+        <div class="card">
+          <ul class="bullets">
+            <li>If this policy changes, the “last updated” date at the top of this page changes with it.</li>
+            <li>Questions about this policy, or a request to remove something you contributed, can be raised through the project's issue tracker.</li>
+          </ul>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

@@ -149,8 +149,12 @@ test('the worker tells the page when the rules changed, without giving it the ru
 
 test('a card is judged again when the rules change, not remembered forever', () => {
   assert.ok(script.includes('decidedByCurrentRules'), 'a stale verdict must be detectable');
+  // The comparison now reads the record out first, because the revision is no
+  // longer the whole test: a decision is also stale once its effect has left
+  // the page (see brainbot-overlay.test.js). The guarantee is unchanged — a
+  // record is still judged against the revision in force.
   assert.ok(
-    script.includes('?.revision === config.revision'),
+    /record\.revision !== config\.revision/.test(script),
     'a record must be compared against the revision in force'
   );
   assert.ok(
@@ -187,10 +191,33 @@ test('a card that is clean again is restored before it is marked clean', () => {
     'the clean path must restore the card first'
   );
   assert.ok(
-    /function reset\(\) \{\s*for \(const element of cardElements\(\)\) restoreCard\(element\);\s*\}/.test(
+    /function reset\(\) \{[\s\S]{0,400}for \(const element of cardElements\(\)\) restoreCard\(element\);/.test(
       script
     ),
     'a full reset must go through the same restore, so the two cannot drift'
+  );
+});
+
+test('the feed pass is bounded to what can be seen, and remembers verdicts', () => {
+  // A feed can hold hundreds of cards, and most of them repeat a title the
+  // worker has already judged. Both facts are used: off-screen cards wait for the
+  // scroll pass, and an identity is asked about once per rules fingerprint.
+  assert.ok(script.includes('const verdictCache'), 'decided identities are cached');
+  assert.ok(script.includes('function nearViewport'), 'distance from the viewport is measured');
+  assert.ok(
+    /if \(!nearViewport\(element\)\) continue;/.test(script),
+    'a card far off screen is left undecided rather than sent to the worker'
+  );
+  assert.ok(
+    /if \(applyCachedVerdict\(element, card\)\) continue;/.test(script),
+    'a cached verdict is applied without a round-trip'
+  );
+  assert.ok(/rememberVerdict\(card, verdict\)/.test(script), 'blocked verdicts are remembered');
+  assert.ok(/rememberVerdict\(card, null\)/.test(script), 'and clean ones too, so they are not re-asked');
+  assert.ok(/verdictCache\.clear\(\)/.test(script), 'a rules change clears the cache');
+  assert.ok(
+    /addEventListener\('scroll', scheduleScan/.test(script),
+    'scrolling brings the cards that were skipped near the viewport'
   );
 });
 

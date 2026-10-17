@@ -10,18 +10,20 @@ workflow.
   matching engine** as the Android app.
 - **Blocks YouTube ads** — the ad network requests are refused before they load,
   the ad slots are removed from the page, and a video ad that still starts is
-  skipped (or run out) without touching the video you are watching. One toggle
-  turns the whole thing off.
-- **An optional Protection password.** After install the extension offers to set
-  one, and once it is set, turning Protection on or off asks for it. It is a
-device lock, not an account — see §12.
+  muted and chased off at 16× in a fraction of a second — with the ad's own
+  countdown and badges hidden — without touching the video you are watching. One
+  toggle turns the whole thing off.
+- **A mandatory Protection password.** Setup is the first screen after install:
+  no settings exist until the password does, and every settings write is refused
+  by the worker until then. After that, turning Protection on or off asks for it.
+  It is a device lock, not an account — see §12.
 - Hides **YouTube Shorts** — the sidebar and mini-guide entry points, the chip
   above the feed, the Shorts shelf and its individual cards, and the channel
   page's Shorts tab — **and** blocks Shorts links, matching the app's
   `blockShorts` control.
-- **Block a YouTube channel** from a video's ⋮ menu or by right-clicking a
-  thumbnail — no need to open the video first. Its videos leave your feeds, its
-  search result disappears, and its channel page and videos will
+- **Block a YouTube channel** from a video's ⋮ menu, a Short's ⋮, or by
+  right-clicking a thumbnail — no need to open the video first. Its videos leave
+  your feeds, its search result disappears, and its channel page and videos will
   not open. Manage them in settings — remove one, or ask for a **global block**,
   with no account and no sign-in.
 - **Brain Bot protection** on YouTube feeds, with a choice of *remove* or
@@ -43,7 +45,9 @@ device lock, not an account — see §12.
 3. Click **Load unpacked** and select this repository's root folder (the one
    containing `manifest.json`).
 4. Pin the extension from the puzzle-piece menu. Clicking the icon opens the
-   popup; **Full settings** opens the complete Block tab.
+   popup — once Protection is on it is the ClearView name, *Total blocked* and
+   *Today blocked*, and **Open settings** into the complete Block tab. The
+   Protection switch appears only while protection is OFF.
 
 No build step is required — the extension is plain ES modules and ships as-is.
 
@@ -54,14 +58,19 @@ redirect), Node 20+ only if you want to run the tests or regenerate the rules.
 
 ## 2. Configure
 
-Open **Full settings** (or `chrome://extensions` → *Extension options*).
+Open the settings page — **Open settings** on the popup, or `chrome://extensions` →
+*Extension options*. It is a sidebar of seven sections — Protection, YouTube,
+Blocked items, Community, Activity, Security and Advanced — with the long
+keyword/channel lists behind a **Show more** button that opens the whole list on a
+page of its own — searchable, with room for every row — instead of stretching the
+settings page.
 
 | Setting | Purpose |
 | --- | --- |
-| **Protection** | Master switch. Off means nothing is blocked at all. Gated by the password once one is set. |
-| **Protection password** | Optional device lock. Set it to stop Protection being switched off in one click. |
+| **Protection** | Master switch. Off means nothing is blocked at all. Always gated by the password. |
+| **Protection password** | Required device lock, created at first run. Change it from *Security*; it cannot be removed. |
 | **Strict Mode** | Adds the app's discovery terms (bikini, lingerie, …). |
-| **Block YouTube ads** | Refuses YouTube ad requests, removes ad slots, and skips video ads. On by default. |
+| **Block YouTube ads** | Refuses YouTube ad requests, removes ad slots, and chases off video ads (muted, at 16×, with the ad's own UI hidden). On by default. |
 | **Block YouTube Shorts** | Hides the Shorts entry points, the feed shelf and its cards, and blocks Shorts links (app parity). |
 | **Brain Bot Protection** | Filters YouTube feed cards. Choose *Remove from feed* or *Show protection overlay*. |
 | **Blocked websites / keywords** | Your own rules. Keywords apply to every site and search. |
@@ -69,6 +78,8 @@ Open **Full settings** (or `chrome://extensions` → *Extension options*).
 | **Blocked channels** | Channels you blocked, with *Remove* and *Ask to block for everyone* on each. Stored by `@handle` and by channel id where they are known, so a rename never loses the block; a block made from a feed card that carries no link is stored and matched by the channel's printed name, and says so. |
 | **Backend server** | Defaults to the deployed ClearView server. Change for self-hosting. |
 | **Anonymous identity** | The random install id your contributions are sent with. |
+| **Your data** | *Export my data* downloads settings, blocked items, activity and the anonymous id as JSON (never the password or admin session). *Erase all data* clears both storage areas and returns the page to setup. |
+| **Privacy** | What stays on the device and what can leave it, with a link to the full **privacy policy** page (`src/privacy/privacy.html`, linked from here — the popup holds one link, into these settings). |
 
 Everything is stored in `chrome.storage.sync` (settings) and
 `chrome.storage.local` (caches, identity, and the Protection password hash — a
@@ -197,6 +208,61 @@ the worker's — and keeps a page from holding the rule set.
   by an overlay, per the chosen mode. YouTube is a single-page app, so changes are
   re-applied on `yt-navigate-finish` and on DOM mutations (debounced), and every
   card is marked once handled — an overlay can never be stacked twice.
+
+  **The overlay is a block, not a decoration.** It is drawn on the card's
+  *thumbnail only* — the title and byline stay readable — and it names what
+  matched (`Blocked by ClearView` / `Matched “…”`), because a block the user
+  cannot account for is one they cannot judge. A blocked channel is presented
+  the same way as a keyword match: the display mode chooses cover or removal for
+  both, so a channel the user just blocked cannot vanish before the reason can be
+  read. The cover is a **near-solid black** panel, and it is a signpost: the report
+  action lives on the video's own page, not on the feed thumbnail.
+
+  **A covered thumbnail can never play a hover preview — and a hover cannot wipe
+  the cover.** Covering the thumbnail is not enough on its own: YouTube starts a
+  muted inline preview as the pointer rests on a card, and it can hang that
+  preview off the page instead of inside the card. So:
+
+  - the stylesheet hides every preview surface — including any `video` inside a
+    protected card;
+  - hovering a protected card sets a page-wide `cv-protected-hover` lock that
+    hides preview surfaces everywhere, backed by a 120 ms burst that pauses them
+    (a preview created after the pointer arrived is caught as it appears);
+  - the card's verdict is kept on its record, so if the hover wipes the cover
+    (YouTube replaces the thumbnail's contents) it is rebuilt in place at once,
+    with no worker round-trip;
+  - a capture-phase `play` guard pauses any preview that starts between passes —
+    scoped to a protected card, or to the page while a protected card is hovered,
+    so an ordinary card's preview is untouched.
+
+  A sweep on each debounced pass repeats the same work for cards YouTube
+  re-renders without a pointer event, because a preview that keeps playing is
+  still playback.
+
+  **A covered video is paused, not unavailable.** Clicking the cover (or the
+  card's title) opens the video page normally; there the content script asks the
+  worker whether the video is blocked and, if so, pauses it behind a panel over
+  the *player* only. The description, channel and **comments stay readable**, and
+  the panel carries **Report false positive** — so a mistaken block can be judged
+  and reported without leaving the page. The report sends the matched rule *and*
+  the video URL, in the one free-text field the reports endpoint already accepts
+  (`Video: … | Title: … | Channel: …`), which is what lets an administrator see
+  exactly which video was wrongly blocked. The playback guard pauses the element
+  again if anything tries to resume it, and the block is removed on the next
+  `yt-navigate-finish`.
+
+  **A decision lasts only as long as its effect.** The record says what the
+  script *decided*, not what the page currently shows — and YouTube re-stamps and
+  re-attaches whole feed subtrees, which takes the overlay (or the `display: none`)
+  with it. A verdict is therefore treated as stale the moment its effect has left
+  the document, so the overlay is rebuilt on the next pass instead of the card
+  reporting itself as handled while the page shows it unlocked.
+- **The feed pass is bounded.** Only cards within ~600px of the viewport are
+  judged; the rest are picked up by the scroll pass, so a 500-card feed does not
+  become one worker request. Verdicts are cached by title + channel for the life
+  of the current rules fingerprint (`verdictCache`), because a feed repeats the
+  same identities and re-asking about them is pure traffic. A rules change clears
+  the cache and resets every card.
 - **Feed cards are read as they actually are, not as they were.** A card's title
   and channel are read from *both* card markups in the wild: the classic
   `#video-title` / `ytd-channel-name` renderer, and the current
@@ -232,15 +298,27 @@ Three layers, each covering what the one before it cannot:
    ads out of the DOM *with their grid wrapper* — because a hidden grid item
    keeps its cell and leaves a hole in the feed. Removed nodes are remembered, so
    the switch is reversible.
-3. **A video ad that still starts is skipped.** YouTube's own skip control is
-   clicked the moment it exists; an overlay/banner ad is dismissed by its close
-   button; and an unskippable ad is fast-forwarded to its end. The pass runs on a
-   one-second heartbeat as well as on DOM mutations, because an ad is announced
-   by a *class* change on the player, which fires no mutation — a pass driven by
-   the observer alone would routinely miss it.
+3. **A video ad that still starts is chased off, not waited out.** The pass tries
+   the player's own `skipAd` API, clicks YouTube's skip control (every variant,
+   repeatedly), dismisses an overlay/banner ad, and for an ad that cannot be
+   dismissed **runs it out at 16×** while muting it. A one-second heartbeat is too
+   slow for a short pre-roll, so a short, self-cancelling **burst** of passes runs
+   at 120 ms while the player is showing an ad, re-applying the seek because the
+   player can reset `currentTime` when it hands the element over. The ad's own
+   furniture — countdown, badge, "your video will play after the ad", click-through
+   overlay — is hidden, so an ad that cannot be unloaded at least does not
+   announce itself.
 
-The mute that the unskippable path applies is recorded on the element and undone
-the moment the ad ends, so the video the user came to watch is never left silent.
+   *What no extension can promise:* YouTube now stitches many ads into the video
+   stream itself (SSAP), where the ad and the video are one response. There is no
+   URL to block and no separate element to remove, so the honest guarantee is
+   "the ad is over in a fraction of a second and never makes a sound", not
+   "the ad does not exist". Everything addressable at all is listed above.
+
+The mute AND the playback rate the unskippable path applies are recorded on the
+element and both undone the moment the ad ends, so the video the user came to
+watch is never left silent or stuck at 16×. The burst of passes is cancelled with
+the ad, so nothing keeps running in the background afterwards.
 
 The toggle (`blockYoutubeAds`) follows the same rule as the other content
 controls: it is inert while **Protection** is off, and the ruleset is enabled by
@@ -260,6 +338,14 @@ opens a context **sheet** (`yt-sheet-view-model` with a list of
 `ytd-menu-popup-renderer` list. The entry acts on the card's own channel, and
 falls back to the page's (`/watch`, a channel page) when the card names nobody —
 which is every card on a channel's own grid.
+
+  The same entry is added to a **Short's** ⋮ in the reels player, and to a
+  Shorts card in a feed shelf. The player is a card in every way that matters —
+  title, channel and three dots — and its live menu is the same contextual sheet
+  as the grid's, rendered into the document-level popup container. Its title is
+  read from `yt-shorts-video-title-view-model` (the live player's h1), because
+  the old reel header had already been replaced; reading only that left the
+  title empty, so a keyword could never match a Short.
 
   A card also comes in **two container shapes**, and both are recognised. The
   renderers (`ytd-rich-item-renderer` and friends) wrap the modern card, but the
@@ -371,8 +457,10 @@ second system.
 
 ## 6. Admin dashboard
 
-Open it from the popup or the options page (`src/admin/admin.html`, also available
-at `chrome://extensions` → *Extension options*… → *Admin dashboard*).
+Open it from the settings page (`src/admin/admin.html`, also available at
+`chrome://extensions` → *Extension options*… → *Admin dashboard*). The popup no
+longer carries a second door to it: it holds one link, into the settings, and
+everything is behind that.
 
 - Sign in with an **administrator email and password**.
 - **There is no sign-up, and none is missing.** The form is a sign-in only: an
@@ -382,7 +470,20 @@ at `chrome://extensions` → *Extension options*… → *Admin dashboard*).
   with no "create account" next to it reads like a broken button.
 - Tabs: **Overview** (review totals + most-requested targets), **Review queue**
   (approve / reject / mark under review), **Published rules** (enable, disable,
-  remove), **False positives** (keep or remove the reported rule).
+  remove), **False positives**.
+- **False positives are grouped by what was blocked.** One card per channel (or
+  keyword) says how many users reported it; tapping it opens the reports, and
+  every reported **video is a link the administrator can watch**. The overlay's
+  report carries the URL, and the dashboard reads it back out of the detail line,
+  so no backend schema change is needed. Each group still offers *Keep rule* and
+  *Remove rule*.
+- **The Overview shows contested rules.** Each request row carries its
+  false-positive count and share (`reports / (requests + reports)`, so it can
+  never exceed 100%), a rule with three or more reports is badged *contested*, and
+  a **Contested rules** card lists them with their latest report time. The
+  **False positives** tab opens with a seven-day report strip, so a rule that
+  suddenly collects reports overnight reads differently from one that has sat at
+  the same count for a month.
 
 **Authorization is the server's, not the UI's.** Every route runs through the
 backend's `requireAdmin`, which re-reads the administrator's row and its
@@ -510,10 +611,17 @@ nothing at all once Protection is off.
 ## 8. Testing
 
 ```bash
-npm test        # node --test "tests/**/*.test.js"
+npm test        # node --test "tests/**/*.test.js"   (offline, no network)
+npm run canary  # fetch YouTube and check the anchors the content script needs
 ```
 
-221 tests, covering:
+`npm run canary` is deliberately outside the test suite: a network flake is not a
+code failure, and the suite must pass offline. Run it on a schedule before a
+release. It exits `0` when every required anchor is present, `1` when one is
+missing, and `2` when the pages could not be fetched (inconclusive, never a
+pass).
+
+262 tests, covering:
 
 - **`tests/matching.test.js`** — normalization (fullwidth, leetspeak, separator
   and spaced forms), whole-word boundaries, domain matching, the three tiers, and
@@ -541,7 +649,8 @@ npm test        # node --test "tests/**/*.test.js"
   submission **source enum**, the rule that a display name is never promoted to a
   stored handle, and static guards on the ⋮-menu injection (scoped to the watch
   page's own menu, plain DOM rather than YouTube's managed elements, injected
-  once, and placed first so a scrolling menu cannot hide it).
+  once, placed first so a scrolling menu cannot hide it, and also placed in the
+  Shorts player's sheet, whose list does not always carry `role="menu"`).
 - **`tests/context-menu-flow.test.js`** — the right-click flow end to end, with
   the real worker against a stubbed `chrome`: what is written to storage for a
   channel link, for a card that gives only a name, and for a target with nothing
@@ -549,11 +658,31 @@ npm test        # node --test "tests/**/*.test.js"
 - **`tests/content-shorts.test.js`** — static guards on the shipped Shorts
   artefacts: the `/shorts` link is matched by **prefix**, the label is matched on
   the element *and* on a descendant, the feed shelf / reel shelf / Short card /
-  Shorts tab are all covered by the stylesheet *and* the script, and the hiding
-  is reversible.
+  Shorts tab are all covered by the stylesheet *and* the script, the hiding is
+  reversible, and a Short is a Brain Bot card in BOTH the reels player (its live
+  title view model, pausing the playing video) and a feed shelf (judged once).
 - **`tests/blocked-page.test.js`** — the blocked destination page: it asks the
   user for nothing, its Back button leaves for YouTube home, every reason the
   worker can emit has copy on it, and it never reprints what was blocked.
+- **`tests/brainbot-overlay.test.js`** — the Brain Bot overlay: it is drawn on the thumbnail
+  with the reason it was blocked, as a near-solid black panel with a text report link living on
+  the blocked *player* instead of the feed; a decision is treated as stale once its effect has
+  left the page (the overlay YouTube threw away is rebuilt); a covered card stops any hover
+  preview by selector, by `mouseover` and on every pass; and the stylesheet's z-index is high
+  enough that YouTube's own thumbnail buttons cannot sit on top of the block.
+- **`tests/icons.test.js`** — the icon pipeline: the PNG helpers round-trip and box-downscale to
+  a hand-computed answer, the committed icons are the committed logo at each declared size (so a
+  drifted icon or a broken generator fails), the manifest points at exactly those files, and
+  every page shows the bundled logo rather than an emoji stand-in.
+- **`tests/privacy-page.test.js`** — the privacy policy page: it ships and links back to the
+  settings, it carries no script and no request of its own, it states the disclosures it has to
+  (on-device checking, no browsing history, the random id, the local password hash, how to delete
+  data), and the settings page points at a path that exists — the popup reaches the policy
+  through those settings, and the test pins that too.
+- **`tests/options-layout.test.js`** — the ask-to-block row: a select inside a field row is sized
+  to its own content, so the value field next to it keeps its space (the shared `.input`/`.select`
+  rule makes both full width, which had left the field with nothing to type into), and the row
+  still builds the picker, the field and the placeholder swap.
 - **`tests/options-identity.test.js`** — the anonymous identity row, and the
   *New identity* option that is gone: the button, the message behind it, the
   worker's handler and the two helpers are all checked absent, so a
@@ -562,8 +691,10 @@ npm test        # node --test "tests/**/*.test.js"
   remembered: the current grid's title is read as well as the classic
   `#video-title`, a card with no channel link falls back to its printed name (and
   a views row is never mistaken for one), a channel RESULT in a search is a card
-  like any other (and the name-bearing link wins over the avatar link), the
-  worker's rules fingerprint is what makes a past verdict stale, the ⋮ menu entry
+  like any other (and the name-bearing link wins over the avatar link), a Short
+  is a card in both the reels player and a feed shelf (its live title comes from
+  the player's own view model), the worker's rules fingerprint is what makes a
+  past verdict stale, the ⋮ menu entry
   is placed where a long menu cannot hide it, a channel page is checked by name
   as well as by URL, and a removal is not undone by its own cleanup.
 - **`tests/config.test.js`** — the `.env` → `env.config.js` generator, run for
@@ -576,8 +707,10 @@ npm test        # node --test "tests/**/*.test.js"
   and starts disabled, every rule blocks and is scoped to YouTube (and never to
   `main_frame`), the ad networks that actually serve YouTube are covered, the
   worker enables the ruleset from the setting under the master switch, the
-  content pass removes AND restores, the skip/fast-forward/mute paths are
-  present, and the Protection change is gated in the worker rather than the UI.
+  content pass removes AND restores, the player's own `skipAd` is tried, an
+  unskippable ad is run out at 16× on a 120 ms burst with the user's rate restored
+  afterwards, the ad's own interface is hidden, and the Protection change is
+  gated in the worker rather than the UI.
 - **`tests/password.test.js`** — the local password: no plaintext is ever
   stored, the right password verifies and the wrong one does not, the same
   password hashes differently on every write (per-install salt), replacing it
@@ -588,8 +721,22 @@ npm test        # node --test "tests/**/*.test.js"
   refused without the password, refused with the wrong one, and applied with the
   right one — while every other setting stays free.
 - **`tests/ui-render.test.js`** — the popup and the settings page rendered for
-  real against a small DOM shim: the hero, the ad toggle, the first-run password
-  offer, the password card, and the dialog's mismatch/cancel/retry behaviour.
+  real against a small DOM shim: the popup's activity panel with the switch
+  hidden while protection is on (and drawn only while it is off), the controls that
+  must NOT be on the popup, the mandatory setup gate (the page is nothing else
+  until a password exists), the settings page's cards, the *Show more* full-page
+  list (keywords, blocked channels, submissions and protection history), and the
+  dialog's mismatch/cancel/retry behaviour.
+- **`tests/admin-reports.test.js`** — the false-positive queue on the dashboard:
+  reports are grouped by channel/keyword, tapping a group opens it, each reported
+  video is a real link that opens in a new tab, the URL and channel are read back
+  out of the report's `detail` line, the Overview shows a per-rule false-positive
+  rate and a contested list, the reports tab carries a seven-day trend, and the
+  dashboard keeps its flat layout.
+- **`tests/maintenance.test.js`** — the YouTube selector canary: it is wired to
+  `npm run canary`, checks the anchors the content script actually uses, treats an
+  unreachable page as inconclusive rather than a pass, and is deliberately not
+  part of the offline test suite.
 
 ### Manual acceptance checklist
 
@@ -600,17 +747,33 @@ npm test        # node --test "tests/**/*.test.js"
 | Normal searches unaffected | Search anything ordinary. |
 | Shorts gone: entry points, feed shelf, Shorts cards, channel tab | Toggle on, reload YouTube, scroll the home feed, open a channel page, open a `/shorts/…` link (blocked). |
 | **YouTube ads blocked** | With the toggle on, reload YouTube: no pre-roll, no feed/sidebar ad slots, no banner. Turn it off and the ad slots return on the next reload. |
-| **First-run password offer** | On a fresh install the settings page offers to set a password; skipping it does not ask again. |
-| **Protection gated by the password** | With a password set, flip Protection on the popup — it asks for the password, and a wrong one changes nothing. |
+| **Mandatory setup** | On a fresh install the settings page is only a password form: no settings, no skip. Close it and reopen — it is still there, and the popup says *Finish setup*. |
+| **Nothing changes before setup** | On a fresh install, a settings write from the console (`settings/update`) is refused with `password_required`. |
+| **Protection gated by the password** | Flip Protection on the popup or the settings page — it asks for the password, a wrong one changes nothing, and five wrong guesses lock the check for a minute. |
+| **Export / erase** | Settings → Advanced → *Export my data* downloads a JSON file without any credential; *Erase all data* asks for confirmation, then returns the page to setup. |
 | Brain Bot remove / overlay | Toggle each mode on a home feed. |
 | Dynamic navigation | Scroll the feed; overlays must not duplicate. |
 | **Block a channel from ⋮** | Open a video, use the ⋮ menu → *Block this channel*; the entry then reads *Unblock this channel*. |
+| **Block a Short’s channel from its ⋮** | Open `/shorts/…`, use the three-dot menu → *Block channel*: the toast names the channel, and the Short is covered (overlay) or removed (remove) and paused. |
+| **A Shorts shelf card responds too** | A blocked channel or matching keyword covers or removes its Short in the home shelf, not only in the player. |
 | **Block a channel by right-click** | Right-click a thumbnail → *Block this channel (ClearView)*. On the current grid the card carries no channel link: the block is then recorded by name, and the toast says which name. |
 | **A blocked channel’s search result is gone** | Search the channel's name: no avatar result, no Subscribe button, for it — and other channels' results are untouched. |
 | **A blocked channel is gone** | Its cards leave home/search/subscriptions (both card markups — the `yt-lockup-view-model` grid and the classic list), `/@handle` and `/channel/UC…` show the blocked page, and its video pages redirect there. |
 | **A block made on a video page reaches the feed** | Block from a video's ⋮ menu, go back to the feed, scroll: no card from that channel, including ones already on screen. |
-| **Brain Bot overlay is visible** | Switch to *Show protection overlay* with a keyword that matches: the card stays and is covered by the ClearView overlay, and switch to *Remove* and the same card leaves. |
+| **Brain Bot overlay is visible** | Switch to *Show protection overlay* with a keyword that matches: the card stays, its **thumbnail** is covered by a *Blocked by ClearView* overlay naming the matched term, and switching to *Remove* makes the same card leave. |
+| **A covered card opens a blocked player** | In overlay mode, click the covered thumbnail: the video page opens with the player blocked and paused, while the description and comments remain readable and the block offers *Report false positive*. Press play: it pauses again. The card's ⋮ still opens, with *Unblock* in it. |
+| **A blocked channel gets the overlay too** | Block a channel, return to the feed: its card stays, with only the thumbnail covered and the title readable — exactly like a keyword match. |
+| **A false positive can be reported** | In overlay mode, click a covered thumbnail, then *Report false positive* on the blocked player: the link changes to *Reported — thanks*, the video stays paused, and the dashboard shows the report under that channel with the video URL. |
+| **A covered thumbnail never previews** | Hover a covered card for several seconds: no muted preview plays, and no sound is heard. |
+| **Ads cost a moment, not a minute** | Open a video whose ad cannot be blocked at the network layer: the ad is muted and gone in a fraction of a second, with no countdown, badge or "your video will play after the ad" message on screen. |
+| **The overlay survives a feed re-render** | In overlay mode, scroll the feed away and back: a blocked card comes back still covered rather than showing its thumbnail uncovered. |
+| **The extension icon is the brand logo** | `chrome://extensions` and the toolbar show the ClearView logo — not the old shield. |
 | **Right-click off-target is refused** | Right-click a link in a video description → a message, and no block. |
+| **Ask to block: the field is typeable** | Settings → *Ask to block it for everyone*: the Keyword / Channel handle picker sits beside a text field, not in place of it, and the field follows the picker. |
+| **Privacy policy opens** | Settings → *Privacy* → *Read the privacy policy*, and the popup's *Open settings* then that card. |
+| **The popup is minimal** | Click the toolbar icon with Protection on: the ClearView title, *Blocked today*, the 7-day and all-time totals with a seven-day bar strip, and a quiet *Open settings* row — no switch. Turn Protection off: the switch appears so it can be turned back on. Nothing scrolls and nothing overlaps. |
+| **Long lists open on their own page** | Add more than four keywords, blocked channels or submissions (or block more than eight things): the card shows a preview and *Show more (N)*, which opens a full page with a search field; removing a row updates it in place. |
+| **Today's number** | After a block, *Today blocked* goes up by one and *Total blocked* by one. Open it the next morning: today reads 0 again, the lifetime number does not. |
 | Settings persist | Restart Chrome. |
 | Approved keywords distributed | Approve a submission in the dashboard, then *Check for updates*. |
 
@@ -640,18 +803,24 @@ src/
     api.js                    Backend client (public + admin)
     state.js                  Live settings + rule bundle
   content/                    YouTube content script (Shorts, ads, Brain Bot)
-  popup/                      The Block tab, in miniature
-  options/                    The full Block tab
+  popup/                      ClearView and compact activity; a switch only while off
+  options/                    Sidebar settings page (the full Block tab)
   admin/                      Protected moderation dashboard
   blocked/                    Blocked destination page
+  privacy/                    The privacy policy page (static, no script)
   ui/                         Shared design system + helpers
     theme.css                 The minimalist design system (light + dark)
-    shared.js                 DOM builder, cards, hero, toast
-    password.js               The password dialog and first-run offer
+    shared.js                 DOM builder, cards, switch, toast
+    password.js               The password dialog and the mandatory setup form
 scripts/
   extract-builtin-rules.mjs   Regenerate rules from the Android app
-  make-icons.mjs              Generate the PNG icons (no dependencies)
+  make-icons.mjs              Derive the four icons from icons/logo.png (no dependencies)
+  png.mjs                     The PNG read/resample/write the icon generator uses
   make-config.mjs             Turn .env into src/common/env.config.js
+  check-youtube-selectors.mjs `npm run canary`: fail loudly if YouTube's anchors move
+icons/
+  logo.png                    The ClearView brand logo, the source of every icon
+  icon16/32/48/128.png        GENERATED from logo.png by `npm run icons`
 tests/                        node --test suite
 ```
 
@@ -659,6 +828,10 @@ tests/                        node --test suite
 
 ## 10. Privacy and security
 
+- The full policy is a page of its own, `src/privacy/privacy.html`, linked from the settings
+  *Privacy* card — the popup is the name, compact activity and a link into those settings, and the
+  policy is one step in. It is **static HTML with no script** — a page whose job is
+  to say what does not leave the browser should be incapable of sending anything itself.
 - Websites and searches are checked **on the device** and are never uploaded.
   Only anonymous keyword *submissions* and *reports* leave the browser.
 - The extension never collects or uploads browsing history.
@@ -701,6 +874,15 @@ tests/                        node --test suite
 - **A name-only block cannot be submitted for everyone.** A global request needs
   a `@handle`, because that is what the server stores — so the settings row for a
   name-only block offers *Remove* and says it is matched by name.
+- **The protection overlay is injected, like the ⋮ entry.** It is a plain `div`
+  appended to the card's thumbnail element and re-created whenever YouTube throws
+  it away. The host is chosen by `thumbnailHost`: a thumbnail container that does
+  not contain the card's title first, the box around the card's image second, and
+  only if neither exists a compact banner inside the card — never a full-card
+  cover, because that would hide the title. The title is also raised above the
+  overlay in the stylesheet as a last line of defence. The card's toggle buttons
+  (⋮, Watch later) stay live: none of them plays the video, and the ⋮ is where
+  *Unblock* lives.
 - **The interface is deliberately quiet.** One accent, a neutral surface scale,
   hairline borders and one soft shadow: `src/ui/theme.css` is the whole design
   system, and the CSS custom properties at the top of it are the only knobs. Rows
@@ -721,7 +903,10 @@ tests/                        node --test suite
   breaks something.
 - **A YouTube ad can still flash for a moment.** The ruleset and the stylesheet
   are what prevent that, but an ad served from YouTube's own origin can render a
-  frame before the content pass acts. Skipping is reactive by nature.
+  frame before the content pass acts. Skipping is reactive by nature. Ads
+  stitched into the video stream (SSAP) cannot be removed at all — the pass mutes
+  them and chases them off at 16×, which is the best any browser extension can
+  honestly promise for those.
 - **The password is a device lock.** It is not authentication, and it does not
   survive clearing the extension's data — see §12.
 - Community keywords are distributed after a refresh (TTL 6 h, or on demand), so
@@ -735,12 +920,23 @@ tests/                        node --test suite
 
 ## 12. The Protection password
 
-An optional lock on the **Protection** switch, offered once after install
+A **mandatory** lock on the **Protection** switch, created at first run
 (`src/common/password.js`, `src/ui/password.js`).
 
-- **What it guards.** Turning Protection on or off, from any screen. The check
-  is in the service worker's `settings/update` — the one path every change goes
-  through — so it cannot be bypassed by a page that skips the dialog.
+- **Setup cannot be skipped.** A fresh install opens the settings page at a
+  password form and nothing else — no navigation, no cards, no switch. Closing the
+  tab does not postpone it: the next visit lands on the same form, and the popup
+  says *Finish setup*.
+- **Nothing can be changed before it exists.** The worker refuses every
+  `settings/update` with `password_required` until a password is set. That is what
+  makes it mandatory in practice rather than a dialog a page can skip: a fresh
+  install has no password-less window in which Protection could be turned off.
+- **What it guards.** Turning Protection on or off, from any screen, via the
+  worker's `settings/update` — the one path every change goes through. Other
+  settings depend on the password existing, but do not ask for it every time.
+- **Lockout.** Five wrong guesses lock the check for a minute
+  (`cv.passwordAttempts`, local like the hash). A correct password clears the
+  count; while locked, even the right password waits.
 - **What it is not.** A device lock, not an account and not authentication. It
   stops a one-click change on a shared or borrowed machine. It cannot hide
   anything from someone with full access to the browser profile, and the UI says
@@ -750,8 +946,9 @@ An optional lock on the **Protection** switch, offered once after install
   Local and not synced, because a credential has no business travelling to
   another machine with the settings. Verification is a constant-time comparison,
   and every failure returns the same answer.
-- **Creating, changing and removing it.** Offered in the settings page's
-  *Security* section and as a first-run offer. Changing or removing it requires
-  the current password, so the lock cannot remove itself; forgetting it means
-  clearing the extension's storage, which is stated plainly rather than dressed
-  up as a recovery flow.
+- **Changing it.** From the settings page's *Security* section, with the current
+  password. There is no *Remove password* action: the password is required, so
+  removal would only bounce the user back to setup.
+- **Forgetting it.** Erase the extension's data (*Advanced → Erase all data*) or
+  clear the extension's storage. This is stated plainly rather than dressed up as
+  a recovery flow — there is no recovery channel by design.

@@ -119,52 +119,266 @@ html.cv-block-ads ytd-engagement-panel-section-list-renderer[target-id='engageme
   display: none !important;
 }
 
-/* The "ad" countdown badge, when an ad is playing. The picture itself is dealt
-   with by the script (skip or fast-forward); this only removes the label. */
+/*
+ * The ad's own interface, when an ad is playing.
+ *
+ * The picture itself is dealt with by the script (skip, or run out at 16×), and
+ * this removes what is left: the countdown, the "Ad" badge, the "your video
+ * will play after the ad" message and the click-through overlay. The point is
+ * that an ad which cannot be unloaded should at least not ANNOUNCE itself — the
+ * user sees their video area, not an ad's furniture.
+ */
 html.cv-block-ads .ytp-ad-badge,
 html.cv-block-ads .ytp-ad-text,
-html.cv-block-ads .ytp-ad-simple-ad-badge {
+html.cv-block-ads .ytp-ad-simple-ad-badge,
+html.cv-block-ads .ytp-ad-duration-remaining,
+html.cv-block-ads .ytp-ad-message-container,
+html.cv-block-ads .ytp-ad-preview-container,
+html.cv-block-ads .ytp-ad-player-overlay,
+html.cv-block-ads .ytp-ad-player-overlay-layout,
+html.cv-block-ads .ytp-ad-player-overlay-skip-or-preview {
   display: none !important;
 }
 
 /* ── Brain Bot protection overlay ──────────────────────────────────────── */
 
+/*
+ * Drawn on the card's THUMBNAIL, so it covers the one control that would play
+ * the video — and only that. The title and byline sit outside this element and
+ * stay readable; the script refuses to use a host that contains the title, and
+ * the rule below is the last line of defence if a card's markup ever nests them
+ * anyway. The z-index is deliberately enormous: YouTube's thumbnail carries its
+ * own overlays (the duration badge, the hover text, the player buttons), and a
+ * modest value let one of them sit above the block.
+ */
 .cv-block-overlay {
   position: absolute;
   inset: 0;
-  z-index: 2;
+  z-index: 2147483000;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 8px;
+  padding: 6px;
   box-sizing: border-box;
   text-align: center;
   border-radius: 12px;
-  background: rgba(0, 32, 28, 0.88);
-  border: 1px solid rgba(99, 218, 203, 0.55);
-  backdrop-filter: blur(2px);
-  cursor: not-allowed;
+  /* A near-solid black cover: nothing of the thumbnail — and no hover preview
+     YouTube manages to start behind it — may read through. */
+  background: rgba(4, 5, 6, 0.97);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  /* The block opens the video rather than swallowing it: the player is where
+     playback is stopped, so the description and comments stay available. */
+  pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+}
+
+/*
+ * The fallback, when a card has no thumbnail element to sit on at all.
+ *
+ * It must not become a full-card cover — that is what hid the title — so it is
+ * laid out in the card's flow as a compact banner instead of over it.
+ */
+.cv-block-overlay--banner {
+  position: relative;
+  inset: auto;
+  margin: 6px;
+  padding: 6px 8px;
+  cursor: default;
 }
 
 .cv-block-overlay__label {
   font-family: "YouTube Sans", Roboto, Arial, sans-serif;
-  font-size: 13px;
-  font-weight: 600;
-  color: #63dacb;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+  color: #ffffff;
   line-height: 1.2;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
+/* Two lines, then clipped: the reason has to survive on a thumbnail the size of
+   a phone card, where one nowrap line would be cut to an ellipsis. */
 .cv-block-overlay__reason {
   font-family: Roboto, Arial, sans-serif;
-  font-size: 11px;
-  color: #d7e6e3;
-  opacity: 0.85;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.88);
+  line-height: 1.35;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
   max-width: 100%;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/*
+ * The false-positive action is a TEXT link, not a second button on the cover:
+ * the block already has one thing to read and one thing to do, and a bordered
+ * pill at thumbnail size competed with the label. It stays tappable through a
+ * generous padding rather than a drawn box.
+ */
+.cv-block-overlay__report,
+.cv-player-block__report {
+  margin-top: 4px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #9ff0e3;
+  font-family: Roboto, Arial, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cv-block-overlay__report:hover,
+.cv-block-overlay__report:focus-visible,
+.cv-player-block__report:hover,
+.cv-player-block__report:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  outline: none;
+}
+
+.cv-block-overlay__report:disabled,
+.cv-player-block__report:disabled {
+  opacity: 0.7;
+  text-decoration: none;
+  cursor: default;
+}
+
+/*
+ * The title is never part of the cover.
+ *
+ * The script already picks a thumbnail-only host. This raises the title above
+ * the overlay regardless, so a card whose markup nests the title inside the
+ * image container still shows it instead of losing it under the block.
+ */
+[data-cv-protected] #video-title,
+[data-cv-protected] #video-title-link,
+[data-cv-protected] .ytLockupMetadataViewModelTitle {
+  position: relative;
+  z-index: 2147483002;
+}
+
+/*
+ * No hover preview inside a card this script has protected.
+ *
+ * YouTube plays a muted preview of the video the moment the pointer rests on a
+ * thumbnail. Covering the thumbnail normally takes the hover away from it, but a
+ * preview YouTube already started keeps playing behind the overlay — and "the
+ * video must not be played" has to hold for that too.
+ *
+ * The surfaces are hidden by SHAPE as well as by name (`video` inside a
+ * protected card), because the inline preview has shipped under several
+ * wrappers; the script's own pass pauses whatever is left, since a playing
+ * element keeps its sound even when it is not painted.
+ */
+[data-cv-protected] ytd-video-preview,
+[data-cv-protected] ytd-moving-thumbnail-renderer,
+[data-cv-protected] #inline-preview-player,
+[data-cv-protected] #mouseover-overlay,
+[data-cv-protected] .ytp-inline-preview-mode,
+[data-cv-protected] ytd-thumbnail-overlay-hover-text-renderer,
+[data-cv-protected] video {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+/*
+ * The same block for the length of a hover, page-wide.
+ *
+ * YouTube can hang its inline preview off the page instead of inside the card
+ * it belongs to. Hovering a covered card therefore puts `cv-protected-hover` on
+ * <html> and hides every preview surface everywhere until the pointer leaves —
+ * the script pauses them as well, since a hidden element can still be playing.
+ */
+html.cv-protected-hover ytd-video-preview,
+html.cv-protected-hover ytd-moving-thumbnail-renderer,
+html.cv-protected-hover #inline-preview-player,
+html.cv-protected-hover #mouseover-overlay,
+html.cv-protected-hover .ytp-inline-preview-mode {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+/*
+ * The card's ⋮ is lifted ABOVE the overlay instead of being buried by it.
+ *
+ * A protected card has to stay manageable: the ⋮ is where "Unblock this channel"
+ * lives, and a block that cannot be undone from the card itself is a trap. The
+ * overlay still swallows the click that would play the video, and the script's
+ * guard still refuses everything else — this only keeps the menu reachable.
+ */
+[data-cv-protected] ytd-thumbnail-overlay-toggle-button-renderer,
+[data-cv-protected] .ytThumbnailOverlayButtonViewModelHost {
+  z-index: 2147483001 !important;
+}
+
+/* ── A blocked video, in place ─────────────────────────────────────────── */
+
+/*
+ * The watch page stays: only the PLAYER is covered. That is what lets a user
+ * still read the description and the comments — and report the block — instead
+ * of being thrown onto a blank blocked page for the whole video.
+ */
+.cv-player-block {
+  position: absolute;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  box-sizing: border-box;
+  text-align: center;
+  background: rgba(5, 7, 9, 0.97);
+  color: #ffffff;
+  font-family: Roboto, Arial, sans-serif;
+}
+
+.cv-player-block__label {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  color: #ffffff;
+}
+
+.cv-player-block__reason {
+  font-size: 15px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.cv-player-block__note {
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.cv-player-block__report {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+/* The frame must not peek out from behind the panel while it is blocked. */
+html.cv-video-blocked #movie_player video,
+html.cv-video-blocked .html5-video-player video {
+  visibility: hidden !important;
+}
+
+/* …and neither should the controls, which would let playback be resumed. */
+html.cv-video-blocked .ytp-chrome-bottom {
+  display: none !important;
 }
 
 /* ── The "Block this channel" entry in YouTube's ⋮ menu ────────────────── */

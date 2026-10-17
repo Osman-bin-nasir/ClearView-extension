@@ -146,6 +146,41 @@ test('an unskippable ad is run out, and the mute it costs is undone', () => {
   );
 });
 
+test('an ad the user cannot skip is chased off at 16×, not waited out', () => {
+  // One seek per second let a three-second ad play most of its length before the
+  // jump landed, which is what "the video just loads until the ad finishes" was.
+  assert.ok(script.includes('function startAdBurst'), 'a short burst of passes runs while an ad is showing');
+  assert.ok(
+    /setInterval\([\s\S]{0,600}, 120\)/.test(script),
+    'the burst is fast enough to beat a short pre-roll'
+  );
+  assert.ok(script.includes('video.playbackRate = 16'), 'the ad is run out at 16×');
+  assert.ok(
+    /video\.dataset\.cvAdRate/.test(script) && /playbackRate = Number\(video\.dataset\.cvAdRate\)/.test(script),
+    'and the rate the user had is restored when the ad ends'
+  );
+  assert.ok(
+    /typeof player\.skipAd === 'function'/.test(script),
+    'the player’s own skip API is tried before anything else'
+  );
+  assert.ok(
+    /Number\.isFinite\(video\.duration\)[\s\S]{0,400}Math\.min\(video\.currentTime \+ 15, 3600\)/.test(script),
+    'a stitched ad with no usable duration is nudged forward instead'
+  );
+});
+
+test('the ad’s own interface is hidden, so an ad cannot announce itself', () => {
+  for (const selector of [
+    '.ytp-ad-badge',
+    '.ytp-ad-duration-remaining',
+    '.ytp-ad-message-container',
+    '.ytp-ad-player-overlay',
+    '.ytp-ad-player-overlay-skip-or-preview',
+  ]) {
+    assert.ok(css.includes(selector), `the stylesheet must hide ${selector}`);
+  }
+});
+
 test('the stylesheet hides the ad containers by class, independent of the script', () => {
   assert.ok(css.includes('html.cv-block-ads'), 'the stylesheet must key on the html class');
   for (const selector of [
@@ -162,12 +197,17 @@ test('the stylesheet hides the ad containers by class, independent of the script
 
 // ── The UI ───────────────────────────────────────────────────────────────
 
-test('both surfaces offer the ads toggle and write the same setting', () => {
-  for (const page of ['src/popup/popup.js', 'src/options/options.js']) {
-    const source = read(page);
-    assert.ok(source.includes('Block YouTube ads'), `${page} must name the control`);
-    assert.ok(source.includes('blockYoutubeAds'), `${page} must write the setting`);
-  }
+test('the ads toggle is on the settings page, and there is only one of it', () => {
+  const options = read('src/options/options.js');
+  assert.ok(options.includes('Block YouTube ads'), 'the settings page must name the control');
+  assert.ok(options.includes('blockYoutubeAds'), 'and write the setting');
+
+  // The popup is compact activity and a link into the settings. The ad
+  // control used to be on both surfaces, which is exactly the duplication the
+  // rewrite removed — a second copy is what made the popup scroll.
+  const popup = read('src/popup/popup.js');
+  assert.ok(!popup.includes('blockYoutubeAds'), 'the popup must not carry a second copy');
+  assert.ok(!popup.includes('Block YouTube ads'), 'nor its label');
 });
 
 // ── The password gate ────────────────────────────────────────────────────
@@ -187,8 +227,8 @@ test('changing Protection is gated in the worker, not only in the UI', () => {
   // by a message from anywhere, so the check has to be in the one path every
   // change passes through.
   assert.ok(
-    /'settings\/update':[\s\S]{0,400}hasPassword\(\)[\s\S]{0,200}verifyPassword\(/.test(worker),
-    'settings/update must verify the password when protection changes'
+    /'settings\/update':[\s\S]{0,500}password_required[\s\S]{0,700}verifyPasswordGuarded\(/.test(worker),
+    'settings/update refuses every write until the mandatory password exists, then checks it'
   );
   assert.ok(worker.includes("ApiError('invalid_password'"), 'a wrong password must be refused with a code');
 });
@@ -198,20 +238,27 @@ test('the password can be created, changed and removed, each with its own guard'
     assert.ok(worker.includes(handler), `the worker must handle ${handler}`);
   }
   // Change and remove must require the CURRENT password — otherwise the lock
-  // removes itself.
+  // removes itself. Both go through the lockout, not the bare verifier.
   assert.ok(
-    /'password\/change':[\s\S]{0,260}verifyPassword\(message\.current/.test(worker),
+    /'password\/change':[\s\S]{0,260}verifyPasswordGuarded\(message\.current/.test(worker),
     'changing the password must require the current one'
   );
   assert.ok(
-    /'password\/remove':[\s\S]{0,260}verifyPassword\(message\.password/.test(worker),
+    /'password\/remove':[\s\S]{0,260}verifyPasswordGuarded\(message\.password/.test(worker),
     'removing the password must require it'
   );
 });
 
-test('the first-run offer is dismissible and remembers the answer', () => {
-  assert.ok(worker.includes("'password/dismissOnboarding'"), 'skipping must be recorded');
+test('setup is mandatory: there is no skip, and no card until it is done', () => {
   const options = read('src/options/options.js');
-  assert.ok(options.includes('offerPasswordOnFirstRun'), 'the options page must offer it once');
-  assert.ok(options.includes('Skip for now'), 'and must let the user past it');
+  const popup = read('src/popup/popup.js');
+  assert.ok(options.includes('renderSetupGate'), 'the settings page builds a setup screen');
+  assert.ok(!options.includes('Skip for now'), 'the setup screen has no skip');
+  assert.ok(!/offerPasswordOnFirstRun/.test(options), 'the old one-time offer is gone');
+  assert.ok(
+    /if \(!state\.passwordSet\) \{\s*renderSetupGate\(\);\s*return;/.test(options),
+    'nothing else renders before the password exists'
+  );
+  assert.ok(popup.includes('Finish setup'), 'the popup says setup is unfinished');
+  assert.ok(popup.includes('Set your Protection password to finish setup'));
 });

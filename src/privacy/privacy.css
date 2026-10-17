@@ -1,0 +1,84 @@
+/* The privacy policy page. A readable single column, sharing the settings page's
+   width so the extension's pages do not jump between two measures. The content
+   is static HTML — no script — so it renders with the design system alone, and
+   this file only adds what a long prose page needs: a lede, a bullet list and
+   paragraphs inside a card. */
+
+.shell {
+  max-width: 700px;
+  margin: 0 auto;
+  padding-bottom: 72px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-width: 0;
+}
+
+.lede {
+  margin: 18px 18px 0;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.lede strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.card-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.card-text + .bullets,
+.bullets + .card-text {
+  margin-top: 12px;
+}
+
+.bullets {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* The accent bullet the cards use, so a policy page and a settings card list the
+   same way. */
+.bullets li {
+  position: relative;
+  padding-left: 15px;
+}
+
+.bullets li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.62em;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+
+.bullets li + li {
+  margin-top: 8px;
+}
+
+.bullets strong {
+  color: var(--text);
+}
+
+.bullets em,
+.card-text em {
+  color: var(--text);
+  font-style: italic;
+}

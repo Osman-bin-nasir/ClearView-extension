@@ -1,62 +1,589 @@
-/* The options page: a readable single column, so the Block tab's vertical
-   section order survives at desktop width. */
+/*
+ * The settings page.
+ *
+ * A two-column layout: a quiet navigation rail and one readable content column.
+ * The visual language is deliberately flat — hairline borders, small radii, no
+ * gradients or glows — so the page reads as a tool rather than a landing page.
+ * The shared theme still supplies the components (cards, switches, inputs);
+ * this file only changes how they are arranged and how loud they are on this
+ * screen.
+ */
 
-.shell {
-  max-width: 700px;
-  margin: 0 auto;
-  padding-bottom: 72px;
+:root {
+  --settings-sidebar: 228px;
+  --settings-measure: 760px;
+  --settings-border: #22272b;
+  --settings-card: #111416;
+  --settings-input: #0d1012;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+html {
+  scroll-behavior: smooth;
 }
 
-.brand-mark {
-  flex: none;
-  width: 40px;
-  height: 40px;
-  border-radius: 13px;
-  background: var(--primary-soft);
+body {
+  background-image: none;
+}
+
+/* ── Shell ─────────────────────────────────────────────────────────────── */
+
+.settings-shell {
   display: grid;
-  place-items: center;
-  font-size: 20px;
+  grid-template-columns: var(--settings-sidebar) minmax(0, 1fr);
+  max-width: 1160px;
+  min-height: 100vh;
+  margin: 0 auto;
 }
 
-.list {
-  margin-top: 12px;
+/* ── Sidebar ───────────────────────────────────────────────────────────── */
+
+.settings-sidebar {
+  position: sticky;
+  top: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 26px;
+  height: 100vh;
+  padding: 22px 14px 18px;
+  border-right: 1px solid var(--settings-border);
 }
 
-.list-row {
+.settings-brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
-  font-size: 12.5px;
+  padding: 0 8px;
+  color: inherit;
+  text-decoration: none;
 }
 
-.list-row .grow {
-  flex: 1;
+.settings-brand .brand-mark {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+
+.settings-brand__text {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.list-row .meta {
-  font-size: 11px;
+.settings-brand__name {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.2px;
+  line-height: 1.2;
+}
+
+.settings-brand__meta {
+  font-size: 10.5px;
+  color: var(--faint);
+  line-height: 1.3;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.settings-nav__label {
+  padding: 0 9px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
   color: var(--faint);
 }
 
-/* A blocked channel needs two lines of its own (a name the user recognises and
-   the handle/id behind it), so it cannot be the single-line chip row the other
-   lists use. */
+.settings-nav__label:not(:first-child) {
+  margin-top: 16px;
+}
+
+.settings-nav a {
+  display: block;
+  padding: 7px 9px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.settings-nav a:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.settings-nav a.is-active {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.settings-nav a:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.settings-sidebar__foot {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--settings-border);
+}
+
+.settings-admin {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.settings-admin:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.settings-admin:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+/* ── Header and content ────────────────────────────────────────────────── */
+
+.settings-main {
+  min-width: 0;
+}
+
+.settings-topbar {
+  padding: 38px 48px 20px;
+  border-bottom: 1px solid var(--settings-border);
+}
+
+.settings-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.35px;
+  line-height: 1.25;
+}
+
+.settings-lede {
+  max-width: var(--settings-measure);
+  margin: 5px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.settings-content {
+  width: 100%;
+  max-width: calc(var(--settings-measure) + 96px);
+  padding: 0 48px 88px;
+}
+
+/* ── Mandatory password setup ──────────────────────────────────────────── */
+
+/*
+ * Setup is not a settings screen with a dialog over it: the navigation, the
+ * admin entry and every card are gone until the password exists. Closing the tab
+ * is the only way out, and the next visit lands on the same screen.
+ */
+body.setup-required .settings-shell {
+  display: block;
+}
+
+body.setup-required .settings-sidebar {
+  display: none;
+}
+
+body.setup-required .settings-main {
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+body.setup-required .settings-topbar {
+  padding: 48px 24px 0;
+  border-bottom: 0;
+}
+
+body.setup-required .settings-content {
+  max-width: none;
+  padding: 0 24px 64px;
+}
+
+.setup-gate {
+  margin-top: 24px;
+  padding: 26px;
+  border: 1px solid var(--settings-border);
+  border-radius: 12px;
+  background: var(--settings-card);
+}
+
+.setup-gate__mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  margin-bottom: 14px;
+}
+
+.setup-gate__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.3px;
+  line-height: 1.25;
+}
+
+.setup-gate__text {
+  margin: 8px 0 16px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--faint);
+}
+
+.setup-gate__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.setup-gate__submit {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.setup-gate__note {
+  margin: 12px 0 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--faint);
+}
+
+/* ── Sections ──────────────────────────────────────────────────────────── */
+
+.group {
+  padding: 34px 0 8px;
+  scroll-margin-top: 20px;
+}
+
+.group + .group {
+  border-top: 1px solid var(--settings-border);
+}
+
+.group-head {
+  margin-bottom: 12px;
+}
+
+.group-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 650;
+  letter-spacing: -0.1px;
+}
+
+.group-desc {
+  margin: 3px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--faint);
+}
+
+.group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── Cards ─────────────────────────────────────────────────────────────── */
+
+/*
+ * A card here is a row with a boundary, not a slab. The shared theme's gradient,
+ * shadow and 22px radius are removed at this scope, so a settings page of thirty
+ * rows still reads as one page.
+ */
+.settings-content .card {
+  margin: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--settings-border);
+  border-radius: 9px;
+  background-color: var(--settings-card);
+  background-image: none;
+  box-shadow: none;
+}
+
+.settings-content .card-head {
+  gap: 10px;
+}
+
+.settings-content .card-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint);
+}
+
+.settings-content .card-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.05px;
+}
+
+.settings-content .card-subtitle {
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--faint);
+}
+
+.settings-content .card-detail {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.settings-content .card-detail li + li {
+  margin-top: 7px;
+}
+
+.settings-content .card-info {
+  width: 22px;
+  height: 22px;
+  border-width: 1.25px;
+}
+
+/* Active protection: a neutral card with one accent edge. */
+.settings-content .card.on,
+.settings-content .card.alert {
+  background-color: var(--settings-card);
+  background-image: none;
+}
+
+.settings-content .card.on {
+  border-color: rgba(46, 230, 197, 0.24);
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.settings-content .card.alert {
+  border-color: rgba(240, 196, 105, 0.22);
+  box-shadow: inset 2px 0 0 var(--warning);
+}
+
+.settings-content .card.on .card-icon,
+.settings-content .card.alert .card-icon {
+  background: transparent;
+  color: var(--primary);
+}
+
+.settings-content .card.alert .card-icon {
+  color: var(--warning);
+}
+
+.settings-content .card.on .card-title,
+.settings-content .card.alert .card-title {
+  color: var(--text);
+}
+
+.settings-content .card.on .card-subtitle,
+.settings-content .card.alert .card-subtitle {
+  color: var(--faint);
+}
+
+.settings-content .card.on .card-detail,
+.settings-content .card.alert .card-detail {
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--muted);
+}
+
+.settings-content .card.on .card-detail li::before,
+.settings-content .card.alert .card-detail li::before {
+  background: var(--faint);
+}
+
+.settings-content .card.on .card-info,
+.settings-content .card.alert .card-info {
+  color: var(--faint);
+}
+
+/* The lists are plain rows inside the card, not a dashed second component. */
+.settings-content .card.dashed {
+  border: 1px solid var(--settings-border);
+  background-color: transparent;
+}
+
+.settings-content .card-action {
+  margin-top: 10px;
+  padding: 9px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ── Controls ──────────────────────────────────────────────────────────── */
+
+.settings-content .switch {
+  width: 40px;
+  height: 24px;
+  border-width: 1px;
+}
+
+.settings-content .switch::after {
+  width: 18px;
+  height: 18px;
+}
+
+.settings-content .switch[aria-checked="true"]::after {
+  transform: translateX(16px);
+}
+
+.btn {
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 8px 12px;
+}
+
+.btn.small {
+  padding: 5px 9px;
+  font-size: 11.5px;
+}
+
+.input,
+.select {
+  padding: 9px 11px;
+  border: 1px solid var(--settings-border);
+  border-radius: 7px;
+  background: var(--settings-input);
+  font-size: 12.5px;
+}
+
+.input:focus,
+.select:focus {
+  background: var(--settings-input);
+}
+
+.field-row .select {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 100%;
+}
+
+.field-row .input {
+  min-width: 0;
+}
+
+.suggest-row {
+  flex-wrap: wrap;
+}
+
+.chip-list {
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.chip {
+  gap: 6px;
+  padding: 4px 5px 4px 9px;
+  border: 1px solid var(--settings-border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 11.5px;
+}
+
+.chip button {
+  width: 17px;
+  height: 17px;
+}
+
+.mode-note {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+.toggle-group {
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.toggle-group .btn.selected {
+  background: var(--primary-soft);
+}
+
+/* ── Lists ─────────────────────────────────────────────────────────────── */
+
+.list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--settings-border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+/*
+ * One row is a single line of facts — name on the left, time and state on the
+ * right — so it has to be a flex line, not loose inline text: without this the
+ * value, the timestamp and the pill ran into each other on the submissions
+ * list. Long values shrink and wrap instead of pushing the row apart.
+ */
+.list-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.list-row + .list-row {
+  border-top: 1px solid var(--settings-border);
+}
+
+.list-row .grow {
+  flex: 1 1 180px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.list-row .meta {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.list-row .pill {
+  flex: 0 0 auto;
+}
+
+.list .empty {
+  padding: 12px;
+}
+
 .channel-row {
   align-items: flex-start;
   flex-wrap: wrap;
@@ -68,12 +595,8 @@
 }
 
 .channel-row .channel-name {
-  font-size: 13px;
-  font-weight: 650;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
 }
 
 .channel-row .btn-row {
@@ -83,28 +606,224 @@
 }
 
 .channel-row .status-line {
-  margin-top: 6px;
+  margin-top: 5px;
 }
 
-.submissions-table td,
-.submissions-table th {
-  font-size: 12px;
+/* ── Activity numbers ──────────────────────────────────────────────────── */
+
+.stat-grid {
+  gap: 0;
+  margin-top: 10px;
+  border: 1px solid var(--settings-border);
+  border-radius: 7px;
+  overflow: hidden;
 }
 
-.mode-note {
-  font-size: 12px;
-  color: var(--muted);
-  margin-top: 6px;
+.stat {
+  padding: 12px 12px;
+  border-radius: 0;
+  background: var(--settings-card);
+  text-align: left;
+}
+
+.stat + .stat {
+  border-left: 1px solid var(--settings-border);
+}
+
+.stat-value {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+
+.stat-label {
+  margin-top: 1px;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+
+/* ── "Show more" and the full-page list ─────────────────────────────── */
+
+.show-more-btn {
+  margin-top: 8px;
+  align-self: flex-start;
+}
+
+/*
+ * "Show more" opens a PAGE, not a dialog. The settings page is where a list is
+ * summarised; this is where it is read. The whole viewport is the list, with a
+ * sticky header and search so the controls stay put while the rows scroll —
+ * every row gets the width and height to be clearly visible.
+ */
+body.fullpage-open {
+  overflow: hidden;
+}
+
+.fullpage-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  overflow-y: auto;
+  background-color: var(--bg);
+  background-image: radial-gradient(130% 60% at 50% -8%, var(--bg-glow) 0%, rgba(11, 14, 16, 0) 72%);
+}
+
+.fullpage {
+  width: min(760px, 100%);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 0 20px 64px;
+}
+
+.fullpage-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px 0 14px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--settings-border);
+}
+
+.fullpage-heading {
+  min-width: 0;
+}
+
+.fullpage-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.3px;
+  line-height: 1.25;
+}
+
+.fullpage-sub {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--faint);
+}
+
+.fullpage-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 0 10px;
+}
+
+.fullpage-tools .input {
+  flex: 1 1 auto;
+}
+
+.fullpage-count {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.fullpage-list {
+  margin-top: 0;
+}
+
+.fullpage-list .list-row {
+  padding: 16px 16px;
+  gap: 10px 14px;
+  font-size: 13px;
+}
+
+.fullpage-list .list-row .meta {
+  font-size: 11.5px;
+}
+
+.fullpage-list .list .empty,
+.fullpage-list .empty {
+  padding: 28px 15px;
+  font-size: 13px;
+}
+
+.fullpage-list .btn.small {
+  flex: none;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--faint);
+  line-height: 1.5;
 }
 
 .identity {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--muted);
   word-break: break-all;
 }
 
-.hint {
-  font-size: 11.5px;
-  color: var(--faint);
+/* ── Narrow windows ────────────────────────────────────────────────────── */
+
+/*
+ * Below a tablet width the rail becomes a horizontal strip above the content.
+ * Settings is often opened in a narrow tab, and a 228px rail would leave the
+ * cards unreadable.
+ */
+@media (max-width: 900px) {
+  .settings-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-sidebar {
+    position: static;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    height: auto;
+    padding: 10px 16px;
+    border-right: 0;
+    border-bottom: 1px solid var(--settings-border);
+    overflow-x: auto;
+  }
+
+  .settings-brand {
+    flex: none;
+    padding: 0;
+  }
+
+  .settings-brand__meta,
+  .settings-nav__label {
+    display: none;
+  }
+
+  .settings-nav {
+    flex-direction: row;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .settings-nav a {
+    padding: 6px 9px;
+    white-space: nowrap;
+  }
+
+  .settings-sidebar__foot {
+    margin: 0 0 0 auto;
+    padding: 0;
+    border: 0;
+  }
+
+  .settings-admin {
+    width: auto;
+    padding: 6px 9px;
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+
+  .settings-topbar {
+    padding: 22px 20px 16px;
+  }
+
+  .settings-content {
+    padding: 0 20px 64px;
+  }
 }
